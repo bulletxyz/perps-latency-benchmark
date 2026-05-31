@@ -308,6 +308,68 @@ func TestRecentSeriesReads1mAnd1hLevels(t *testing.T) {
 	}
 }
 
+func TestRecentSeriesIncludesSampledCategorySplit(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "exchange_tps.db")
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	start := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Minute)
+	if err := store.SetSourceMetadata(ctx, SourceMetadata{
+		Venue:         "hyperliquid",
+		Quality:       SourceQualityBlockDerived,
+		BucketSeconds: 60,
+		Description:   "test source",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordObservedBucket1m(ctx, BucketDelta{
+		Venue:       "hyperliquid",
+		BucketStart: start,
+		TxCount:     6000,
+		BlockCount:  600,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordCategorySplitDelta1m(ctx, CategorySplitDelta{
+		Venue:          "hyperliquid",
+		BucketStart:    start,
+		SampledTxCount: 100,
+		SampledBlocks:  10,
+		CategoryShares: map[string]int64{
+			"core_order":  600_000,
+			"core_cancel": 300_000,
+			"evm":         100_000,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RefreshRollups(ctx, "hyperliquid", start, start); err != nil {
+		t.Fatal(err)
+	}
+
+	series, err := store.RecentSeries(ctx, SeriesBucket1m, start.Add(-time.Second), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series.Series) != 1 {
+		t.Fatalf("rows = %d, want 1", len(series.Series))
+	}
+	split := series.Series[0].CategorySplit
+	if len(split) != 3 {
+		t.Fatalf("split rows = %d, want 3: %+v", len(split), split)
+	}
+	if split[0].Category != "core_order" || split[0].SharePPM != 600_000 {
+		t.Fatalf("expected core_order first by share, got %+v", split[0])
+	}
+	if split[0].Share != 0.6 || split[0].SampleTxCount != 100 || split[0].SampleBlockCount != 10 {
+		t.Fatalf("unexpected split: %+v", split[0])
+	}
+}
+
 func TestRecentSeriesHidesLaggingProviderReportedBuckets(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "exchange_tps.db")

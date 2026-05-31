@@ -128,10 +128,6 @@ func matchHyperliquidCancelConfirmation(msg map[string]any, remaining map[string
 }
 
 func isHyperliquidTerminalFailure(status string) bool {
-	switch status {
-	case "rejected", "canceled", "marginCanceled", "openInterestCapCanceled", "selfTradeCanceled", "reduceOnlyCanceled", "siblingFilledCanceled", "delistedCanceled":
-		return true
-	default:
-		return false
-	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	return strings.Contains(status, "rejected") || strings.Contains(status, "canceled")
 }

@@ -39,6 +39,15 @@ class LighterCancelPayloadTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             cancel_payload.neutralize_base_amount(Decimal("0.000001"), {"base_amount_decimals": 5})
 
+    def test_neutralize_price_prefers_side_specific_price(self):
+        self.assertEqual(
+            cancel_payload.neutralize_price(
+                {"price": 1500000, "neutralize_buy_price": 1500000, "neutralize_sell_price": 500000},
+                False,
+            ),
+            500000,
+        )
+
     def test_cancel_orders_include_websocket_batch_payload(self):
         class Client:
             def create_auth_token_with_expiry(self, **_kwargs):

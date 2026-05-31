@@ -17,6 +17,11 @@ import {
 } from "react"
 
 import type { Sample } from "@/api/bench"
+import {
+  CSVExportButton,
+  type CSVColumn,
+  type CSVWindowOption,
+} from "@/components/dashboard/csv-export-button"
 import { VenueName, formatVenueLabel } from "@/components/dashboard/venue-logo"
 import { samplePlotDate } from "@/lib/sample-time"
 import { formatLatency, formatTime } from "@/lib/format"
@@ -79,7 +84,8 @@ const COLORS = [
 const MARGIN = { top: 18, right: 20, bottom: 34, left: 62 }
 const TREND_WINDOW_MS = 30 * 60 * 1000
 const TREND_STEP_MS = 5 * 60 * 1000
-const TREND_LABEL = "30m median"
+const TREND_TARGET_POINTS = 900
+const TREND_LABEL = "Trend median"
 const TOOLTIP_HIT_RADIUS_PX = 28
 
 export function LatencyTimeseriesChart({
@@ -94,6 +100,11 @@ export function LatencyTimeseriesChart({
   description = "Confirmation latency over time by venue.",
   emptyMessage = "No latency data is available for the selected filters.",
   headerActions,
+  defaultExportWindow,
+  exportWindowOptions,
+  forceTrendOnly = false,
+  loadExportSamples,
+  showExports = true,
   valueForSample = confirmSampleMs,
   valueLabel = "Latency",
 }: {
@@ -108,11 +119,19 @@ export function LatencyTimeseriesChart({
   description?: string
   emptyMessage?: string
   headerActions?: ReactNode
+  defaultExportWindow?: string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
+  forceTrendOnly?: boolean
+  loadExportSamples?: (window: string) => Promise<Array<Sample>>
+  showExports?: boolean
   valueForSample?: (sample: Sample) => number | undefined
   valueLabel?: string
 }) {
   const [displayMode, setDisplayMode] =
     useState<LatencyDisplayMode>("trend-raw")
+  const effectiveDisplayMode: LatencyDisplayMode = forceTrendOnly
+    ? "trend"
+    : displayMode
   const [hideOutliers, setHideOutliers] = useState(true)
   const series = useMemo(
     () => buildSeries(samples, valueForSample),
@@ -121,14 +140,18 @@ export function LatencyTimeseriesChart({
   const displaySeries = useMemo(
     () =>
       buildDisplaySeries(series, {
-        displayMode,
+        displayMode: effectiveDisplayMode,
         hideOutliers,
       }),
-    [displayMode, hideOutliers, series]
+    [effectiveDisplayMode, hideOutliers, series]
   )
   const domain = useMemo(
     () => getDomains(displaySeries, scaleMode),
     [displaySeries, scaleMode]
+  )
+  const exportRows = useMemo(
+    () => latencyExportRows(samples, valueForSample, valueLabel),
+    [samples, valueForSample, valueLabel]
   )
 
   return (
@@ -143,10 +166,34 @@ export function LatencyTimeseriesChart({
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {headerActions}
-            <DisplayModeToggle
-              value={displayMode}
-              onChange={setDisplayMode}
-            />
+            {showExports ? (
+              <CSVExportButton
+                columns={LATENCY_EXPORT_COLUMNS}
+                defaultWindow={defaultExportWindow}
+                filename={`${title}-data.csv`}
+                filenameForWindow={(window) => `${title}-${window}-data.csv`}
+                loadRows={
+                  loadExportSamples
+                    ? async (window) =>
+                        latencyExportRows(
+                          await loadExportSamples(window),
+                          valueForSample,
+                          valueLabel
+                        )
+                    : undefined
+                }
+                rows={exportRows}
+                windowOptions={exportWindowOptions}
+              />
+            ) : null}
+            {forceTrendOnly ? (
+              <TrendOnlyToggle />
+            ) : (
+              <DisplayModeToggle
+                value={displayMode}
+                onChange={setDisplayMode}
+              />
+            )}
             <OutlierToggle
               checked={hideOutliers}
               onChange={setHideOutliers}
@@ -179,7 +226,7 @@ export function LatencyTimeseriesChart({
               <LatencyFrame
                 domain={domain}
                 height={height}
-                displayMode={displayMode}
+                displayMode={effectiveDisplayMode}
                 scaleMode={scaleMode}
                 series={displaySeries}
                 valueLabel={valueLabel}
@@ -191,6 +238,84 @@ export function LatencyTimeseriesChart({
       </div>
     </section>
   )
+}
+
+interface LatencyExportRow {
+  batchSubmission?: string
+  batchSize: number
+  completedAt?: string
+  measurementMode?: string
+  networkFloorMS?: number
+  orderType?: string
+  plotAt: Date
+  rawNetworkMS?: number
+  scenario: string
+  scheduledAt?: string
+  sentAt?: string
+  speedBumpMS?: number
+  transport: string
+  valueLabel: string
+  valueMS: number
+  venue: string
+}
+
+const LATENCY_EXPORT_COLUMNS: Array<CSVColumn<LatencyExportRow>> = [
+  { header: "plot_at", value: (row) => row.plotAt },
+  { header: "completed_at", value: (row) => row.completedAt },
+  { header: "scheduled_at", value: (row) => row.scheduledAt },
+  { header: "sent_at", value: (row) => row.sentAt },
+  { header: "venue", value: (row) => row.venue },
+  { header: "scenario", value: (row) => row.scenario },
+  { header: "transport", value: (row) => row.transport },
+  { header: "order_type", value: (row) => row.orderType },
+  { header: "batch_size", value: (row) => row.batchSize },
+  { header: "batch_submission", value: (row) => row.batchSubmission },
+  { header: "measurement_mode", value: (row) => row.measurementMode },
+  { header: "metric", value: (row) => row.valueLabel },
+  { header: "latency_ms", value: (row) => row.valueMS },
+  { header: "raw_network_ms", value: (row) => row.rawNetworkMS },
+  { header: "network_floor_ms", value: (row) => row.networkFloorMS },
+  { header: "speed_bump_ms", value: (row) => row.speedBumpMS },
+]
+
+function latencyExportRows(
+  samples: Array<Sample>,
+  valueForSample: (sample: Sample) => number | undefined,
+  valueLabel: string
+) {
+  return samples.flatMap((sample): Array<LatencyExportRow> => {
+    const plotAt = samplePlotDate(sample)
+    const valueMS = valueForSample(sample)
+    if (!plotAt || valueMS === undefined || !Number.isFinite(valueMS)) {
+      return []
+    }
+    return [
+      {
+        batchSize: sample.batch_size,
+        batchSubmission: sample.batch_submission,
+        completedAt: sample.completed_at,
+        measurementMode: sample.measurement_mode,
+        networkFloorMS: nsToExportMS(sample.network_floor_ns),
+        orderType: sample.order_type,
+        plotAt,
+        rawNetworkMS: nsToExportMS(sample.raw_network_ns),
+        scenario: sample.scenario,
+        scheduledAt: sample.scheduled_at,
+        sentAt: sample.sent_at,
+        speedBumpMS: nsToExportMS(sample.speed_bump_ns),
+        transport: sample.transport,
+        valueLabel,
+        valueMS,
+        venue: sample.venue,
+      },
+    ]
+  })
+}
+
+function nsToExportMS(value?: number) {
+  return value !== undefined && Number.isFinite(value) && value >= 0
+    ? value / 1_000_000
+    : undefined
 }
 
 function ChartLoadingState() {
@@ -561,6 +686,20 @@ function DisplayModeToggle({
           {mode.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+function TrendOnlyToggle() {
+  return (
+    <div className="flex h-8 overflow-hidden rounded-sm border border-border bg-surface-1 text-[11px]">
+      <button
+        type="button"
+        className="bg-primary/15 px-2.5 text-foreground ring-1 ring-inset ring-primary/40"
+        disabled
+      >
+        Trend
+      </button>
     </div>
   )
 }
@@ -960,15 +1099,16 @@ function rollingTrend(points: Array<Point>): {
     return { bandPoints: [], linePoints: [] }
   }
 
-  const startTime = floorToStep(points[0].date.getTime(), TREND_STEP_MS)
+  const { stepMS, windowMS } = trendResolution(points)
+  const startTime = floorToStep(points[0].date.getTime(), stepMS)
   const endTime = points[points.length - 1].date.getTime()
-  const halfWindow = TREND_WINDOW_MS / 2
+  const halfWindow = windowMS / 2
   const bandPoints: Array<BandPoint> = []
   const linePoints: Array<Point> = []
   let startIndex = 0
   let endIndex = 0
 
-  for (let time = startTime; time <= endTime; time += TREND_STEP_MS) {
+  for (let time = startTime; time <= endTime; time += stepMS) {
     const minTime = time - halfWindow
     const maxTime = time + halfWindow
 
@@ -1013,6 +1153,38 @@ function rollingTrend(points: Array<Point>): {
 
 function floorToStep(value: number, step: number) {
   return Math.floor(value / step) * step
+}
+
+function trendResolution(points: Array<Point>) {
+  const start = points[0]?.date.getTime() ?? 0
+  const end = points[points.length - 1]?.date.getTime() ?? start
+  const span = Math.max(end - start, TREND_STEP_MS)
+  const targetStep = Math.max(
+    TREND_STEP_MS,
+    Math.ceil(span / TREND_TARGET_POINTS)
+  )
+  const stepMS = roundUpToNiceInterval(targetStep)
+  return {
+    stepMS,
+    windowMS: Math.max(TREND_WINDOW_MS, stepMS * 6),
+  }
+}
+
+function roundUpToNiceInterval(value: number) {
+  const intervals = [
+    5 * 60 * 1000,
+    10 * 60 * 1000,
+    15 * 60 * 1000,
+    30 * 60 * 1000,
+    60 * 60 * 1000,
+    2 * 60 * 60 * 1000,
+    4 * 60 * 60 * 1000,
+    6 * 60 * 60 * 1000,
+    12 * 60 * 60 * 1000,
+    24 * 60 * 60 * 1000,
+    7 * 24 * 60 * 60 * 1000,
+  ]
+  return intervals.find((interval) => interval >= value) ?? intervals[intervals.length - 1]
 }
 
 function withoutUpperOutliers(points: Array<Point>) {

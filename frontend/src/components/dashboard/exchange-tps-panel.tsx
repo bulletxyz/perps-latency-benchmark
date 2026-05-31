@@ -7,17 +7,26 @@ import { ParentSize } from "@visx/responsive"
 import { scaleLinear, scaleLog, scaleTime } from "@visx/scale"
 import { LinePath } from "@visx/shape"
 import { TooltipWithBounds, useTooltip } from "@visx/tooltip"
-import { type PointerEvent, useEffect, useMemo } from "react"
+import {
+  type PointerEvent,
+  useEffect,
+  useMemo,
+} from "react"
 
 import type { ExchangeTPSRow } from "@/api/bench"
 import {
   colorForVenue,
   type LatencyScaleMode,
 } from "@/components/charts/latency-timeseries-chart"
+import {
+  CSVURLExportButton,
+  type CSVWindowOption,
+} from "@/components/dashboard/csv-export-button"
 import { VenueName } from "@/components/dashboard/venue-logo"
 import { formatTime } from "@/lib/format"
 
 const MARGIN = { top: 16, right: 18, bottom: 32, left: 70 }
+const TPS_POINTS_PER_PIXEL = 2
 
 interface TPSPoint {
   date: Date
@@ -36,6 +45,7 @@ interface TPSAverage {
   avgTPS: number
   bucketCount: number
   color: string
+  totalSeconds: number
   totalTx: number
   venue: string
 }
@@ -46,20 +56,28 @@ interface TPSTooltipData {
 }
 
 export function ExchangeTPSPanel({
+  defaultExportWindow,
+  exportHrefForWindow,
+  exportWindowOptions,
   isLoading = false,
   onScaleModeChange,
   onVenueSelectionChange,
   rows,
   scaleMode,
   selectedVenues,
+  showExports = true,
   venues,
 }: {
+  defaultExportWindow?: string
+  exportHrefForWindow?: (window: string) => string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
   isLoading?: boolean
   onScaleModeChange: (mode: LatencyScaleMode) => void
   onVenueSelectionChange: (venues: "all" | Array<string>) => void
   rows: Array<ExchangeTPSRow>
   scaleMode: LatencyScaleMode
   selectedVenues: Array<string>
+  showExports?: boolean
   venues: Array<string>
 }) {
   const completeRows = useMemo(
@@ -102,7 +120,7 @@ export function ExchangeTPSPanel({
               Transactions per second
             </h2>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Minute transaction buckets by exchange.
+              {bucketDescription(completeRows)}
             </p>
           </div>
         </div>
@@ -122,7 +140,19 @@ export function ExchangeTPSPanel({
       <div className="p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-sans text-xs font-semibold">TPS over time</h3>
-          <ScaleToggle value={scaleMode} onChange={onScaleModeChange} />
+          <div className="flex flex-wrap items-center gap-2">
+            {showExports && exportHrefForWindow && exportWindowOptions ? (
+              <CSVURLExportButton
+                defaultWindow={defaultExportWindow}
+                filenameForWindow={(window) =>
+                  `transactions-per-second-${window}.csv`
+                }
+                hrefForWindow={exportHrefForWindow}
+                windowOptions={exportWindowOptions}
+              />
+            ) : null}
+            <ScaleToggle value={scaleMode} onChange={onScaleModeChange} />
+          </div>
         </div>
         <div className="h-[300px]">
           <ParentSize>
@@ -181,12 +211,21 @@ function TPSChart({
   useEffect(() => {
     hideTooltip()
   }, [hideTooltip, series, width, height])
+  const innerWidth = Math.max(width - MARGIN.left - MARGIN.right, 1)
+  const plotSeries = useMemo(
+    () => downsampleTPSSeries(series, innerWidth),
+    [innerWidth, series]
+  )
+  const points = useMemo(
+    () => series.flatMap((item) => item.points),
+    [series]
+  )
+  const tooltipDates = useMemo(() => uniqueSortedDates(points), [points])
 
   if (width <= 0 || height <= 0 || series.length === 0) {
     return null
   }
 
-  const points = series.flatMap((item) => item.points)
   const minDate = minBy(points, (point) => point.date.getTime())?.date
   const maxDate = maxBy(points, (point) => point.date.getTime())?.date
   const maxTPS = maxBy(points, (point) => point.tps)?.tps ?? 1
@@ -198,7 +237,6 @@ function TPSChart({
     return null
   }
 
-  const innerWidth = Math.max(width - MARGIN.left - MARGIN.right, 1)
   const innerHeight = Math.max(height - MARGIN.top - MARGIN.bottom, 1)
   const xScale = scaleTime({
     domain: minDate.getTime() === maxDate.getTime()
@@ -230,16 +268,14 @@ function TPSChart({
   const showTPSAtPointer = (event: PointerEvent<SVGRectElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect()
     const plotX = event.clientX - bounds.left
-    const date = nearestDateAtX(points, xScale.invert(plotX).getTime())
+    const date = nearestDateAtX(tooltipDates, xScale.invert(plotX).getTime())
     if (!date) {
       hideTooltip()
       return
     }
     const tooltipPoints = series
       .map((item) => {
-        const point = item.points.find(
-          (candidate) => candidate.date.getTime() === date.getTime()
-        )
+        const point = findPointAtTime(item.points, date.getTime())
         return point ? { ...point, color: item.color } : null
       })
       .filter((point): point is TPSPoint & { color: string } => point !== null)
@@ -250,7 +286,10 @@ function TPSChart({
       return
     }
     showTooltip({
-      tooltipData: { date, points: tooltipPoints },
+      tooltipData: {
+        date,
+        points: tooltipPoints,
+      },
       tooltipLeft: MARGIN.left + xScale(date) + 12,
       tooltipTop: MARGIN.top + 10,
     })
@@ -307,7 +346,7 @@ function TPSChart({
             stroke="var(--chart-axis)"
             tickStroke="var(--chart-axis)"
           />
-          {series.map((item) => (
+          {plotSeries.map((item) => (
             <LinePath
               key={item.venue}
               data={item.points}
@@ -519,45 +558,136 @@ function buildSeries(rows: Array<ExchangeTPSRow>) {
     .sort((left, right) => left.venue.localeCompare(right.venue))
 }
 
+function downsampleTPSSeries(series: Array<TPSSeries>, width: number) {
+  const maxPoints = Math.max(240, Math.floor(width * TPS_POINTS_PER_PIXEL))
+  return series.map((item) => ({
+    ...item,
+    points: downsampleTPSPoints(item.points, maxPoints),
+  }))
+}
+
+function downsampleTPSPoints(points: Array<TPSPoint>, maxPoints: number) {
+  if (points.length <= maxPoints || maxPoints < 4) {
+    return points
+  }
+  const firstTime = points[0].date.getTime()
+  const lastTime = points[points.length - 1].date.getTime()
+  const span = Math.max(lastTime - firstTime, 1)
+  const bucketCount = Math.max(2, Math.floor(maxPoints / 2))
+  const buckets = new Map<number, { high: TPSPoint; low: TPSPoint }>()
+
+  for (const point of points) {
+    const bucket = Math.min(
+      bucketCount - 1,
+      Math.floor(((point.date.getTime() - firstTime) / span) * bucketCount)
+    )
+    const current = buckets.get(bucket)
+    if (!current) {
+      buckets.set(bucket, { high: point, low: point })
+      continue
+    }
+    if (point.tps < current.low.tps) {
+      current.low = point
+    }
+    if (point.tps > current.high.tps) {
+      current.high = point
+    }
+  }
+
+  const selected = new Map<number, TPSPoint>()
+  for (const point of [points[0], points[points.length - 1]]) {
+    selected.set(point.date.getTime(), point)
+  }
+  for (const bucket of buckets.values()) {
+    selected.set(bucket.low.date.getTime(), bucket.low)
+    selected.set(bucket.high.date.getTime(), bucket.high)
+  }
+  return [...selected.values()].sort(
+    (left, right) => left.date.getTime() - right.date.getTime()
+  )
+}
+
 function averageRowsByVenue(rows: Array<ExchangeTPSRow>) {
   const byVenue = new Map<string, TPSAverage>()
   for (const row of rows) {
     const date = new Date(row.bucket_start)
-    if (Number.isNaN(date.getTime()) || !Number.isFinite(row.tps)) {
+    if (
+      Number.isNaN(date.getTime()) ||
+      !Number.isFinite(row.tps) ||
+      !Number.isFinite(row.bucket_seconds) ||
+      row.bucket_seconds <= 0
+    ) {
       continue
     }
     const current = byVenue.get(row.venue) ?? {
       avgTPS: 0,
       bucketCount: 0,
       color: colorForVenue(row.venue),
+      totalSeconds: 0,
       totalTx: 0,
       venue: row.venue,
     }
     current.bucketCount++
+    current.totalSeconds += row.bucket_seconds
     current.totalTx += row.tx_count
-    current.avgTPS = current.totalTx / (current.bucketCount * 60)
+    current.avgTPS = current.totalTx / current.totalSeconds
     byVenue.set(row.venue, current)
   }
   return [...byVenue.values()].sort((left, right) => left.venue.localeCompare(right.venue))
 }
 
-function nearestDateAtX(points: Array<TPSPoint>, targetMs: number) {
-  let best: Date | null = null
-  let bestDistance = Number.POSITIVE_INFINITY
-  const seen = new Set<number>()
-  for (const point of points) {
-    const pointMs = point.date.getTime()
-    if (seen.has(pointMs)) {
-      continue
-    }
-    seen.add(pointMs)
-    const distance = Math.abs(pointMs - targetMs)
-    if (distance < bestDistance) {
-      best = point.date
-      bestDistance = distance
+function bucketDescription(rows: Array<ExchangeTPSRow>) {
+  const bucketSeconds = rows[0]?.bucket_seconds
+  if (bucketSeconds === 3600) {
+    return "Hourly transaction buckets by exchange."
+  }
+  return "Minute transaction buckets by exchange."
+}
+
+function uniqueSortedDates(points: Array<TPSPoint>) {
+  return [...new Set(points.map((point) => point.date.getTime()))].sort(
+    (left, right) => left - right
+  )
+}
+
+function nearestDateAtX(times: Array<number>, targetMs: number) {
+  if (times.length === 0) {
+    return null
+  }
+  let low = 0
+  let high = times.length - 1
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (times[mid] < targetMs) {
+      low = mid + 1
+    } else {
+      high = mid
     }
   }
-  return best
+  const previous = Math.max(0, low - 1)
+  const best =
+    Math.abs(times[previous] - targetMs) <= Math.abs(times[low] - targetMs)
+      ? times[previous]
+      : times[low]
+  return new Date(best)
+}
+
+function findPointAtTime(points: Array<TPSPoint>, targetMs: number) {
+  let low = 0
+  let high = points.length - 1
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    const value = points[mid].date.getTime()
+    if (value === targetMs) {
+      return points[mid]
+    }
+    if (value < targetMs) {
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+  return null
 }
 
 function stableLogTicks(

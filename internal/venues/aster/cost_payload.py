@@ -130,22 +130,36 @@ class AsterCostClient:
     def balance_snapshot(self) -> dict[str, Any]:
         body = self.signed_get("/fapi/v3/balance", {})
         balances = body if isinstance(body, list) else []
-        usdt = next((item for item in balances if str(item.get("asset") or "").upper() == "USDT"), balances[0] if balances else {})
-        balance = number(usdt.get("balance"))
-        unrealized = number(usdt.get("crossUnPnl"))
+        margin_assets = [item for item in balances if item.get("marginAvailable", True)]
+        if not margin_assets and balances:
+            margin_assets = balances
+        balance = sum(number(item.get("crossWalletBalance") or item.get("balance")) for item in margin_assets)
+        unrealized = sum(number(item.get("crossUnPnl")) for item in margin_assets)
         equity = balance + unrealized
+        available = max((number(item.get("availableBalance")) for item in margin_assets), default=Decimal("0"))
+        updated = max((int(item.get("updateTime") or 0) for item in margin_assets), default=0)
         return {
             "venue": "aster",
-            "currency": str(usdt.get("asset") or "USDT"),
+            "currency": "USD",
             "balance_usd": float(equity),
             "equity_usd": float(equity),
             "unrealized_usd": float(unrealized),
             "captured_at": utc_now(),
             "metadata": {
-                "available_balance": str(usdt.get("availableBalance") or ""),
+                "available_balance": str(available),
                 "wallet_balance": str(balance),
-                "cross_wallet_balance": str(usdt.get("crossWalletBalance") or ""),
-                "update_time": usdt.get("updateTime"),
+                "cross_wallet_balance": str(balance),
+                "update_time": updated,
+                "assets": [
+                    {
+                        "asset": str(item.get("asset") or ""),
+                        "balance": str(item.get("balance") or ""),
+                        "cross_wallet_balance": str(item.get("crossWalletBalance") or ""),
+                        "available_balance": str(item.get("availableBalance") or ""),
+                    }
+                    for item in margin_assets
+                    if number(item.get("balance")) != 0 or number(item.get("crossWalletBalance")) != 0
+                ],
             },
         }
 

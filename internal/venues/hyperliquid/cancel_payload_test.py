@@ -38,6 +38,15 @@ class HyperliquidCancelPayloadTest(unittest.TestCase):
             cancel_payload.Decimal("74257"),
         )
 
+    def test_neutralize_price_prefers_side_specific_price(self):
+        self.assertEqual(
+            cancel_payload.neutralize_price(
+                {"price": "75000", "neutralize_buy_price": "150000", "neutralize_sell_price": "50000"},
+                False,
+            ),
+            cancel_payload.Decimal("50000"),
+        )
+
     def test_pause_for_cumulative_request_debt_sleeps_when_capacity_is_negative(self):
         with (
             mock.patch.object(cancel_payload, "post_json", return_value={"nRequestsUsed": 10, "nRequestsCap": 7, "nRequestsSurplus": 0}),

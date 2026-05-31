@@ -3,6 +3,8 @@ package exchangetps
 import (
 	"context"
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,5 +67,58 @@ func TestHyperliquidCollectorSkipsSessionStartBucket(t *testing.T) {
 	}
 	if collector.shouldIgnoreBlock(now.Add(time.Minute).UnixMilli()) {
 		t.Fatal("next full bucket should not be ignored")
+	}
+}
+
+func TestHyperliquidActionSamplerFetchesBlockDetailsIncludingEVM(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		_, _ = w.Write([]byte(`{
+			"type":"blockDetails",
+			"blockDetails":{
+				"height":123,
+				"numTxs":4,
+				"txs":[
+					{"action":{"type":"order"}},
+					{"action":{"type":"cancel"}},
+					{"action":{"type":"evmRawTx"}},
+					{"action":{"type":"evmRawTx"}}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	delta, err := fetchHyperliquidActionSample(ctx, server.Client(), server.URL, hyperliquidBlock{
+		Height:    123,
+		BlockTime: time.Unix(1_700_000_000, 0).UTC().UnixMilli(),
+		NumTxs:    4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta.SampledTxCount != 4 || delta.SampledBlocks != 1 {
+		t.Fatalf("unexpected sample denominator: %+v", delta)
+	}
+	if delta.CategoryShares["core_order"] != 250_000 || delta.CategoryShares["core_cancel"] != 250_000 || delta.CategoryShares["evm"] != 500_000 {
+		t.Fatalf("unexpected category shares: %+v", delta.CategoryShares)
+	}
+}
+
+func TestHyperliquidSamplerSelectsConfiguredSlotsPerMinute(t *testing.T) {
+	collector := &HyperliquidCollector{ActionSamplesPerMinute: 10}
+	start := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Minute)
+
+	if !collector.shouldSampleActionBreakdown(hyperliquidBlock{BlockTime: start.Add(time.Second).UnixMilli()}) {
+		t.Fatal("first slot should be sampled")
+	}
+	if collector.shouldSampleActionBreakdown(hyperliquidBlock{BlockTime: start.Add(2 * time.Second).UnixMilli()}) {
+		t.Fatal("same slot should not be sampled twice")
+	}
+	if !collector.shouldSampleActionBreakdown(hyperliquidBlock{BlockTime: start.Add(7 * time.Second).UnixMilli()}) {
+		t.Fatal("next slot should be sampled")
 	}
 }

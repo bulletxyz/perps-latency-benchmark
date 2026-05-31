@@ -36,6 +36,14 @@ type BucketDelta struct {
 	ErrorCount  int64
 }
 
+type CategorySplitDelta struct {
+	Venue          string
+	BucketStart    time.Time
+	SampledTxCount int64
+	SampledBlocks  int64
+	CategoryShares map[string]int64
+}
+
 type SourceMetadata struct {
 	Venue         string
 	Quality       SourceQuality
@@ -119,6 +127,26 @@ CREATE TABLE IF NOT EXISTS tps_1h (
   upd INTEGER NOT NULL,
   PRIMARY KEY (v, t)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS tps_category_split_1m (
+  v INTEGER NOT NULL,
+  t INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  share_ppm INTEGER NOT NULL DEFAULT 0,
+  sample_tx INTEGER NOT NULL DEFAULT 0,
+  sample_blk INTEGER NOT NULL DEFAULT 0,
+  upd INTEGER NOT NULL,
+  PRIMARY KEY (v, t, category)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS tps_category_split_1h (
+  v INTEGER NOT NULL,
+  t INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  share_ppm INTEGER NOT NULL DEFAULT 0,
+  sample_tx INTEGER NOT NULL DEFAULT 0,
+  sample_blk INTEGER NOT NULL DEFAULT 0,
+  upd INTEGER NOT NULL,
+  PRIMARY KEY (v, t, category)
+) WITHOUT ROWID;
 DROP INDEX IF EXISTS tps_1m_time_idx;
 DROP INDEX IF EXISTS tps_1h_time_idx;
 `)
@@ -134,6 +162,58 @@ func (s *Store) RecordLiveDelta1m(ctx context.Context, delta BucketDelta) error 
 
 func (s *Store) RecordObservedBucket1m(ctx context.Context, delta BucketDelta) error {
 	return s.write1m(ctx, delta, false)
+}
+
+func (s *Store) RecordCategorySplitDelta1m(ctx context.Context, delta CategorySplitDelta) error {
+	if delta.Venue == "" {
+		return errors.New("venue is required")
+	}
+	if delta.BucketStart.IsZero() {
+		return errors.New("bucket start is required")
+	}
+	if delta.SampledTxCount <= 0 || delta.SampledBlocks <= 0 {
+		return nil
+	}
+	delta.BucketStart = time.Unix(floorUnix(delta.BucketStart.UTC().Unix(), 60), 0).UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	venueID, err := ensureVenue(ctx, tx, delta.Venue)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for category, sharePPM := range delta.CategoryShares {
+		category = strings.TrimSpace(category)
+		if category == "" || sharePPM < 0 {
+			continue
+		}
+		if sharePPM > 1_000_000 {
+			sharePPM = 1_000_000
+		}
+		if _, err = tx.ExecContext(ctx, `
+INSERT INTO tps_category_split_1m (v, t, category, share_ppm, sample_tx, sample_blk, upd)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(v, t, category) DO UPDATE SET
+  share_ppm = CAST(ROUND(
+    ((share_ppm * sample_tx) + (excluded.share_ppm * excluded.sample_tx)) * 1.0 /
+    NULLIF(sample_tx + excluded.sample_tx, 0)
+  ) AS INTEGER),
+  sample_tx = sample_tx + excluded.sample_tx,
+  sample_blk = sample_blk + excluded.sample_blk,
+  upd = excluded.upd
+`, venueID, delta.BucketStart.Unix(), category, sharePPM, delta.SampledTxCount, delta.SampledBlocks, now); err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
+	return err
 }
 
 func (s *Store) SetSourceMetadata(ctx context.Context, metadata SourceMetadata) error {
@@ -278,6 +358,25 @@ GROUP BY v, (t / 3600) * 3600
 `, now, venueID, fromHour, toHour+3599); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM tps_category_split_1h WHERE v = ? AND t BETWEEN ? AND ?`, venueID, fromHour, toHour); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `
+INSERT INTO tps_category_split_1h (v, t, category, share_ppm, sample_tx, sample_blk, upd)
+SELECT
+  v,
+  (t / 3600) * 3600,
+  category,
+  CAST(ROUND(SUM(share_ppm * sample_tx) * 1.0 / NULLIF(SUM(sample_tx), 0)) AS INTEGER),
+  SUM(sample_tx),
+  SUM(sample_blk),
+  ?
+FROM tps_category_split_1m
+WHERE v = ? AND t BETWEEN ? AND ?
+GROUP BY v, (t / 3600) * 3600, category
+`, now, venueID, fromHour, toHour+3599); err != nil {
+		return err
+	}
 	err = tx.Commit()
 	return err
 }
@@ -286,6 +385,9 @@ func (s *Store) ApplyRetention(ctx context.Context, minuteRetention time.Duratio
 	now := time.Now()
 	if minuteRetention > 0 {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM tps_1m WHERE t < ?`, now.Add(-minuteRetention).Unix()); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM tps_category_split_1m WHERE t < ?`, now.Add(-minuteRetention).Unix()); err != nil {
 			return err
 		}
 	}
@@ -304,8 +406,10 @@ func (s *Store) dropUnsupportedTPSTables(ctx context.Context) error {
 	defer rows.Close()
 
 	allowed := map[string]struct{}{
-		"tps_1m": {},
-		"tps_1h": {},
+		"tps_1m":                {},
+		"tps_1h":                {},
+		"tps_category_split_1m": {},
+		"tps_category_split_1h": {},
 	}
 	var unsupported []string
 	for rows.Next() {

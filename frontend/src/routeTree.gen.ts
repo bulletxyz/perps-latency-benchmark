@@ -15,7 +15,11 @@ import { Route as ApiBenchSamplesRouteImport } from './routes/api/bench/samples'
 import { Route as ApiBenchLatestRouteImport } from './routes/api/bench/latest'
 import { Route as ApiBenchLatencySeriesRouteImport } from './routes/api/bench/latency-series'
 import { Route as ApiBenchHealthRouteImport } from './routes/api/bench/health'
+import { Route as ApiBenchExchangeTpsExportRouteImport } from './routes/api/bench/exchange-tps-export'
 import { Route as ApiBenchExchangeTpsRouteImport } from './routes/api/bench/exchange-tps'
+import { Route as ApiBenchAuthSessionRouteImport } from './routes/api/bench/auth/session'
+import { Route as ApiBenchAuthLogoutRouteImport } from './routes/api/bench/auth/logout'
+import { Route as ApiBenchAuthLoginRouteImport } from './routes/api/bench/auth/login'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -47,78 +51,127 @@ const ApiBenchHealthRoute = ApiBenchHealthRouteImport.update({
   path: '/api/bench/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBenchExchangeTpsExportRoute =
+  ApiBenchExchangeTpsExportRouteImport.update({
+    id: '/api/bench/exchange-tps-export',
+    path: '/api/bench/exchange-tps-export',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiBenchExchangeTpsRoute = ApiBenchExchangeTpsRouteImport.update({
   id: '/api/bench/exchange-tps',
   path: '/api/bench/exchange-tps',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBenchAuthSessionRoute = ApiBenchAuthSessionRouteImport.update({
+  id: '/api/bench/auth/session',
+  path: '/api/bench/auth/session',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBenchAuthLogoutRoute = ApiBenchAuthLogoutRouteImport.update({
+  id: '/api/bench/auth/logout',
+  path: '/api/bench/auth/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBenchAuthLoginRoute = ApiBenchAuthLoginRouteImport.update({
+  id: '/api/bench/auth/login',
+  path: '/api/bench/auth/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/bench/exchange-tps': typeof ApiBenchExchangeTpsRoute
+  '/api/bench/exchange-tps-export': typeof ApiBenchExchangeTpsExportRoute
   '/api/bench/health': typeof ApiBenchHealthRoute
   '/api/bench/latency-series': typeof ApiBenchLatencySeriesRoute
   '/api/bench/latest': typeof ApiBenchLatestRoute
   '/api/bench/samples': typeof ApiBenchSamplesRoute
   '/api/bench/taker-cost-series': typeof ApiBenchTakerCostSeriesRoute
+  '/api/bench/auth/login': typeof ApiBenchAuthLoginRoute
+  '/api/bench/auth/logout': typeof ApiBenchAuthLogoutRoute
+  '/api/bench/auth/session': typeof ApiBenchAuthSessionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/bench/exchange-tps': typeof ApiBenchExchangeTpsRoute
+  '/api/bench/exchange-tps-export': typeof ApiBenchExchangeTpsExportRoute
   '/api/bench/health': typeof ApiBenchHealthRoute
   '/api/bench/latency-series': typeof ApiBenchLatencySeriesRoute
   '/api/bench/latest': typeof ApiBenchLatestRoute
   '/api/bench/samples': typeof ApiBenchSamplesRoute
   '/api/bench/taker-cost-series': typeof ApiBenchTakerCostSeriesRoute
+  '/api/bench/auth/login': typeof ApiBenchAuthLoginRoute
+  '/api/bench/auth/logout': typeof ApiBenchAuthLogoutRoute
+  '/api/bench/auth/session': typeof ApiBenchAuthSessionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/bench/exchange-tps': typeof ApiBenchExchangeTpsRoute
+  '/api/bench/exchange-tps-export': typeof ApiBenchExchangeTpsExportRoute
   '/api/bench/health': typeof ApiBenchHealthRoute
   '/api/bench/latency-series': typeof ApiBenchLatencySeriesRoute
   '/api/bench/latest': typeof ApiBenchLatestRoute
   '/api/bench/samples': typeof ApiBenchSamplesRoute
   '/api/bench/taker-cost-series': typeof ApiBenchTakerCostSeriesRoute
+  '/api/bench/auth/login': typeof ApiBenchAuthLoginRoute
+  '/api/bench/auth/logout': typeof ApiBenchAuthLogoutRoute
+  '/api/bench/auth/session': typeof ApiBenchAuthSessionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/api/bench/exchange-tps'
+    | '/api/bench/exchange-tps-export'
     | '/api/bench/health'
     | '/api/bench/latency-series'
     | '/api/bench/latest'
     | '/api/bench/samples'
     | '/api/bench/taker-cost-series'
+    | '/api/bench/auth/login'
+    | '/api/bench/auth/logout'
+    | '/api/bench/auth/session'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/api/bench/exchange-tps'
+    | '/api/bench/exchange-tps-export'
     | '/api/bench/health'
     | '/api/bench/latency-series'
     | '/api/bench/latest'
     | '/api/bench/samples'
     | '/api/bench/taker-cost-series'
+    | '/api/bench/auth/login'
+    | '/api/bench/auth/logout'
+    | '/api/bench/auth/session'
   id:
     | '__root__'
     | '/'
     | '/api/bench/exchange-tps'
+    | '/api/bench/exchange-tps-export'
     | '/api/bench/health'
     | '/api/bench/latency-series'
     | '/api/bench/latest'
     | '/api/bench/samples'
     | '/api/bench/taker-cost-series'
+    | '/api/bench/auth/login'
+    | '/api/bench/auth/logout'
+    | '/api/bench/auth/session'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiBenchExchangeTpsRoute: typeof ApiBenchExchangeTpsRoute
+  ApiBenchExchangeTpsExportRoute: typeof ApiBenchExchangeTpsExportRoute
   ApiBenchHealthRoute: typeof ApiBenchHealthRoute
   ApiBenchLatencySeriesRoute: typeof ApiBenchLatencySeriesRoute
   ApiBenchLatestRoute: typeof ApiBenchLatestRoute
   ApiBenchSamplesRoute: typeof ApiBenchSamplesRoute
   ApiBenchTakerCostSeriesRoute: typeof ApiBenchTakerCostSeriesRoute
+  ApiBenchAuthLoginRoute: typeof ApiBenchAuthLoginRoute
+  ApiBenchAuthLogoutRoute: typeof ApiBenchAuthLogoutRoute
+  ApiBenchAuthSessionRoute: typeof ApiBenchAuthSessionRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -165,11 +218,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBenchHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/bench/exchange-tps-export': {
+      id: '/api/bench/exchange-tps-export'
+      path: '/api/bench/exchange-tps-export'
+      fullPath: '/api/bench/exchange-tps-export'
+      preLoaderRoute: typeof ApiBenchExchangeTpsExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/bench/exchange-tps': {
       id: '/api/bench/exchange-tps'
       path: '/api/bench/exchange-tps'
       fullPath: '/api/bench/exchange-tps'
       preLoaderRoute: typeof ApiBenchExchangeTpsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/bench/auth/session': {
+      id: '/api/bench/auth/session'
+      path: '/api/bench/auth/session'
+      fullPath: '/api/bench/auth/session'
+      preLoaderRoute: typeof ApiBenchAuthSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/bench/auth/logout': {
+      id: '/api/bench/auth/logout'
+      path: '/api/bench/auth/logout'
+      fullPath: '/api/bench/auth/logout'
+      preLoaderRoute: typeof ApiBenchAuthLogoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/bench/auth/login': {
+      id: '/api/bench/auth/login'
+      path: '/api/bench/auth/login'
+      fullPath: '/api/bench/auth/login'
+      preLoaderRoute: typeof ApiBenchAuthLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -178,11 +259,15 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiBenchExchangeTpsRoute: ApiBenchExchangeTpsRoute,
+  ApiBenchExchangeTpsExportRoute: ApiBenchExchangeTpsExportRoute,
   ApiBenchHealthRoute: ApiBenchHealthRoute,
   ApiBenchLatencySeriesRoute: ApiBenchLatencySeriesRoute,
   ApiBenchLatestRoute: ApiBenchLatestRoute,
   ApiBenchSamplesRoute: ApiBenchSamplesRoute,
   ApiBenchTakerCostSeriesRoute: ApiBenchTakerCostSeriesRoute,
+  ApiBenchAuthLoginRoute: ApiBenchAuthLoginRoute,
+  ApiBenchAuthLogoutRoute: ApiBenchAuthLogoutRoute,
+  ApiBenchAuthSessionRoute: ApiBenchAuthSessionRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

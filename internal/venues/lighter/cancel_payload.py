@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from cleanup_common import cleanup_orders_for_venue, cleanup_result, result_orders_for_venue
+from cleanup_common import cleanup_orders_for_venue, cleanup_result, flat_position_guard, guard_preexisting_position, mark_self_heal_position, result_orders_for_venue, self_heal_preexisting_position
 from build_payload import compact_json, env_or_param, next_nonce, order_index
 
 
@@ -60,6 +60,12 @@ async def build(req: dict[str, Any], lighter: Any) -> dict[str, Any]:
             else:
                 orders = await open_cleanup_orders(client, planned_orders(params, builder_params), builder_params, api_key_index, account_index)
             if not orders:
+                repair = await neutralize_preexisting_position_payload(client, params, builder_params, position, api_key_index, account_index)
+                if repair:
+                    return repair
+                guard = flat_position_guard("lighter", position, builder_params)
+                if guard:
+                    return guard
                 return cleanup_result(False, True, "no stale lighter benchmark orders", metadata={"position": position})
         elif phase == "after_run":
             refs = result_orders(dict(params.get("result") or {}))
@@ -91,6 +97,9 @@ async def build(req: dict[str, Any], lighter: Any) -> dict[str, Any]:
                 return cleanup_result(False, True, "no lighter cleanup action needed")
             orders = remaining
 
+        if phase == "before_run" and reconciliation.get("position") and guard_preexisting_position(builder_params):
+            reconciliation["restart_before_measurement"] = True
+            reconciliation["preexisting_position"] = reconciliation["position"]
         return await cancel_orders(client, orders, builder_params, api_key_index, reconciliation)
     finally:
         await client.close()
@@ -105,19 +114,23 @@ async def cancel_orders(client: Any, orders: list[dict[str, Any]], builder_param
 
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     cancel_confirmation = cancel_confirmation_metadata(client, builder_params, api_key_index, orders)
+    metadata = {"cleanup": "cancel_order", "orders": len(tx_types), "cancel_confirmation": cancel_confirmation, "reconciliation": reconciliation}
+    if reconciliation.get("restart_before_measurement"):
+        metadata["restart_before_measurement"] = True
+        metadata["preexisting_position"] = reconciliation.get("preexisting_position")
     if len(tx_types) == 1:
         return {
             "headers": headers,
             "body": urlencode({"tx_type": tx_types[0], "tx_info": tx_infos[0]}),
             "ws_body": compact_json({"type": "jsonapi/sendtx", "data": {"tx_type": tx_types[0], "tx_info": json.loads(tx_infos[0])}}),
-            "metadata": {"cleanup": "cancel_order", "orders": 1, "cancel_confirmation": cancel_confirmation, "reconciliation": reconciliation},
+            "metadata": metadata,
         }
     return {
         "url": builder_params.get("cancel_batch_url", "https://mainnet.zklighter.elliot.ai/api/v1/sendTxBatch"),
         "headers": headers,
         "body": urlencode({"tx_types": json.dumps(tx_types), "tx_infos": json.dumps(tx_infos)}),
         "ws_body": compact_json({"type": "jsonapi/sendtxbatch", "data": {"tx_types": json.dumps(tx_types), "tx_infos": json.dumps(tx_infos)}}),
-        "metadata": {"cleanup": "cancel_order", "orders": len(tx_types), "cancel_confirmation": cancel_confirmation, "reconciliation": reconciliation},
+        "metadata": metadata,
     }
 
 
@@ -317,6 +330,19 @@ async def neutralize_payload(client: Any, params: dict[str, Any], builder_params
     }
 
 
+async def neutralize_preexisting_position_payload(client: Any, params: dict[str, Any], builder_params: dict[str, Any], position: list[dict[str, Any]], api_key_index: int, account_index: int) -> dict[str, Any] | None:
+    if not position or not self_heal_preexisting_position(builder_params):
+        return None
+    repair_params = dict(params)
+    repair_params["run_metadata"] = {"position": []}
+    repair_builder_params = dict(builder_params)
+    repair_builder_params["neutralize_on_fill"] = True
+    payload = await neutralize_payload(client, repair_params, repair_builder_params, api_key_index, account_index)
+    if not payload:
+        return None
+    return mark_self_heal_position(payload, "lighter", position)
+
+
 def position_size(positions: list[dict[str, Any]], market_index: int) -> Decimal:
     for position in positions or []:
         if str(position.get("market", "")) == str(market_index):
@@ -335,6 +361,9 @@ def neutralize_base_amount(delta: Decimal, builder_params: dict[str, Any]) -> in
 
 
 def neutralize_price(builder_params: dict[str, Any], is_buy: bool) -> int:
+    side_price_key = "neutralize_buy_price" if is_buy else "neutralize_sell_price"
+    if builder_params.get(side_price_key) is not None:
+        return int(builder_params[side_price_key])
     if builder_params.get("neutralize_price") is not None:
         return int(builder_params["neutralize_price"])
     price = Decimal(str(builder_params["price"]))

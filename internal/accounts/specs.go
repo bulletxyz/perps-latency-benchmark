@@ -104,6 +104,8 @@ var venueSpecs = []VenueSpec{
 		Name:      "lighter_free",
 		Supported: true,
 		Env: []EnvVar{
+			{Name: "LIGHTER_FREE_L1_PRIVATE_KEY", Secret: true, Note: "Ethereum wallet private key for the separate free-tier Lighter account registration/deposits."},
+			{Name: "LIGHTER_FREE_L1_ADDRESS", Note: "Ethereum address for the separate free-tier Lighter account registration/deposits."},
 			{Name: "LIGHTER_FREE_PRIVATE_KEY", Secret: true, Required: true, Note: "Active Lighter free-tier API private key."},
 			{Name: "LIGHTER_FREE_ACCOUNT_INDEX", Required: true, Note: "Lighter free-tier account index."},
 			{Name: "LIGHTER_FREE_API_KEY_INDEX", Required: true, Note: "Lighter free-tier API key index."},

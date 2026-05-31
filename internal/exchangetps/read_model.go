@@ -24,19 +24,28 @@ type SeriesReadModel struct {
 }
 
 type SeriesRow struct {
-	Venue           string    `json:"venue"`
-	BucketStart     time.Time `json:"bucket_start"`
-	BucketSeconds   int64     `json:"bucket_seconds"`
-	Complete        bool      `json:"complete"`
-	TxCount         int64     `json:"tx_count"`
-	BlockCount      int64     `json:"block_count,omitempty"`
-	OrderCount      int64     `json:"order_count,omitempty"`
-	PlaceCount      int64     `json:"place_count,omitempty"`
-	CancelCount     int64     `json:"cancel_count,omitempty"`
-	ErrorCount      int64     `json:"error_count,omitempty"`
-	TPS             float64   `json:"tps"`
-	OrdersPerSecond float64   `json:"orders_per_second,omitempty"`
-	SourceQuality   string    `json:"source_quality"`
+	Venue           string             `json:"venue"`
+	BucketStart     time.Time          `json:"bucket_start"`
+	BucketSeconds   int64              `json:"bucket_seconds"`
+	Complete        bool               `json:"complete"`
+	TxCount         int64              `json:"tx_count"`
+	BlockCount      int64              `json:"block_count,omitempty"`
+	OrderCount      int64              `json:"order_count,omitempty"`
+	PlaceCount      int64              `json:"place_count,omitempty"`
+	CancelCount     int64              `json:"cancel_count,omitempty"`
+	ErrorCount      int64              `json:"error_count,omitempty"`
+	TPS             float64            `json:"tps"`
+	OrdersPerSecond float64            `json:"orders_per_second,omitempty"`
+	SourceQuality   string             `json:"source_quality"`
+	CategorySplit   []CategorySplitRow `json:"category_split,omitempty"`
+}
+
+type CategorySplitRow struct {
+	Category         string  `json:"category"`
+	Share            float64 `json:"share"`
+	SharePPM         int64   `json:"share_ppm"`
+	SampleTxCount    int64   `json:"sample_tx_count"`
+	SampleBlockCount int64   `json:"sample_block_count"`
 }
 
 type SourceRow struct {
@@ -111,6 +120,17 @@ LIMIT ?
 		return SeriesReadModel{}, err
 	}
 
+	if len(series) > 0 {
+		splits, err := s.recentCategorySplits(ctx, parsedBucket, since)
+		if err != nil {
+			return SeriesReadModel{}, err
+		}
+		for i := range series {
+			key := categorySplitKey{venue: series[i].Venue, bucketUnix: series[i].BucketStart.Unix()}
+			series[i].CategorySplit = splits[key]
+		}
+	}
+
 	sources, err := s.SourceRows(ctx)
 	if err != nil {
 		return SeriesReadModel{}, err
@@ -122,6 +142,54 @@ LIMIT ?
 		Series:    series,
 		Sources:   sources,
 	}, nil
+}
+
+type categorySplitKey struct {
+	venue      string
+	bucketUnix int64
+}
+
+func (s *Store) recentCategorySplits(ctx context.Context, bucket SeriesBucket, since time.Time) (map[categorySplitKey][]CategorySplitRow, error) {
+	table, err := categorySplitTable(bucket)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`
+SELECT venues.code, split.t, split.category, split.share_ppm, split.sample_tx, split.sample_blk
+FROM %s AS split
+JOIN venues ON venues.id = split.v
+WHERE split.t >= ?
+ORDER BY venues.code ASC, split.t ASC, split.share_ppm DESC, split.category ASC
+`, table)
+	rows, err := s.db.QueryContext(ctx, query, since.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	splits := make(map[categorySplitKey][]CategorySplitRow)
+	for rows.Next() {
+		var venue string
+		var bucketUnix int64
+		var row CategorySplitRow
+		if err := rows.Scan(
+			&venue,
+			&bucketUnix,
+			&row.Category,
+			&row.SharePPM,
+			&row.SampleTxCount,
+			&row.SampleBlockCount,
+		); err != nil {
+			return nil, err
+		}
+		row.Share = float64(row.SharePPM) / 1_000_000
+		key := categorySplitKey{venue: venue, bucketUnix: bucketUnix}
+		splits[key] = append(splits[key], row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return splits, nil
 }
 
 func seriesBucketFinalized(
@@ -184,6 +252,16 @@ func seriesTable(bucket SeriesBucket) (string, int64, error) {
 		return "tps_1h", 3600, nil
 	}
 	return "", 0, fmt.Errorf("unsupported exchange TPS bucket %q", bucket)
+}
+
+func categorySplitTable(bucket SeriesBucket) (string, error) {
+	switch bucket {
+	case SeriesBucket1m:
+		return "tps_category_split_1m", nil
+	case SeriesBucket1h:
+		return "tps_category_split_1h", nil
+	}
+	return "", fmt.Errorf("unsupported exchange TPS bucket %q", bucket)
 }
 
 func ParseSeriesBucket(value string) (SeriesBucket, error) {

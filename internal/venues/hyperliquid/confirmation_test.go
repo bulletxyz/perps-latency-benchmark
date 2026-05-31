@@ -36,6 +36,38 @@ func TestMatchHyperliquidConfirmationRejectsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestMatchHyperliquidConfirmationRejectsPerpMarginRejected(t *testing.T) {
+	matched, err := matchHyperliquidConfirmation(map[string]any{
+		"channel": "orderUpdates",
+		"data": []any{map[string]any{
+			"status": "perpMarginRejected",
+			"order":  map[string]any{"cloid": "0xabc"},
+		}},
+	}, map[string]struct{}{"0xabc": {}}, "post_only")
+	if err == nil {
+		t.Fatal("expected perp margin rejected order error")
+	}
+	if matched {
+		t.Fatal("did not expect terminal failure to match as success")
+	}
+}
+
+func TestMatchHyperliquidConfirmationRejectsMixedCaseCanceledStatus(t *testing.T) {
+	matched, err := matchHyperliquidConfirmation(map[string]any{
+		"channel": "orderUpdates",
+		"data": []any{map[string]any{
+			"status": "selfTradeCanceled",
+			"order":  map[string]any{"cloid": "0xabc"},
+		}},
+	}, map[string]struct{}{"0xabc": {}}, "post_only")
+	if err == nil {
+		t.Fatal("expected canceled order error")
+	}
+	if matched {
+		t.Fatal("did not expect terminal failure to match as success")
+	}
+}
+
 func TestMatchHyperliquidConfirmationAcceptsOpenPostOnly(t *testing.T) {
 	matched, err := matchHyperliquidConfirmation(map[string]any{
 		"channel": "orderUpdates",

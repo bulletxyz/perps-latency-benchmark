@@ -65,5 +65,5 @@ func (l benchmarkLifecycle) afterRun(ctx context.Context, result Result) *Cleanu
 }
 
 func (l benchmarkLifecycle) strictStartupFailed(cleanup *CleanupResult) bool {
-	return cleanup != nil && !cleanup.OK && l.cfg.Cleanup.Mode == CleanupModeStrict
+	return cleanup != nil && l.cfg.Cleanup.Mode == CleanupModeStrict && (!cleanup.OK || CleanupRequiresRestartBeforeMeasurement(cleanup))
 }

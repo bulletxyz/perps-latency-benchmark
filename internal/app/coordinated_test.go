@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,4 +76,45 @@ func TestCoordinatedSampleRetentionLimitUsesStoreWindowForContinuousRuns(t *test
 	if limit != 70 {
 		t.Fatalf("limit = %d, want 70", limit)
 	}
+}
+
+func TestCoordinatedStrictStartupCleanupErrorRestartsAfterSelfHeal(t *testing.T) {
+	err := coordinatedStrictStartupCleanupError(
+		map[string]*bench.CleanupResult{
+			"hyperliquid": {
+				OK: true,
+				Metadata: map[string]any{
+					bench.CleanupSelfHealPositionMetadataKey:         true,
+					bench.CleanupRestartBeforeMeasurementMetadataKey: true,
+				},
+			},
+		},
+		[]bench.CoordinatedItem{{
+			Config: bench.Config{
+				Cleanup: bench.CleanupConfig{Enabled: true, Mode: bench.CleanupModeStrict, Scope: bench.CleanupScopeAfterSample},
+			},
+			Venue: namedVenue{name: "hyperliquid"},
+		}},
+		"pre-cycle",
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "pre-cycle cleanup repaired preexisting position") {
+		t.Fatalf("coordinatedStrictStartupCleanupError = %v", err)
+	}
+}
+
+type namedVenue struct {
+	name string
+}
+
+func (v namedVenue) Name() string {
+	return v.name
+}
+
+func (v namedVenue) Prepare(_ context.Context, _ bench.Scenario, _ int, _ int) (bench.PreparedRequest, error) {
+	return bench.PreparedRequest{}, nil
+}
+
+func (v namedVenue) Close(context.Context) error {
+	return nil
 }

@@ -147,6 +147,28 @@ func TestRunnerStrictStartupCleanupFailureSkipsSamples(t *testing.T) {
 	}
 }
 
+func TestRunnerStrictStartupSelfHealSkipsSamples(t *testing.T) {
+	result, err := bench.Runner{
+		Config: bench.Config{
+			Scenario:   bench.ScenarioSingle,
+			Iterations: 1,
+			Cleanup:    bench.CleanupConfig{Enabled: true, Mode: bench.CleanupModeStrict, Scope: bench.CleanupScopeAfterSample},
+		},
+		Client:  NewTestClient(),
+		Venue:   mock.New(mock.Config{}),
+		Cleanup: &selfHealRunCleanup{},
+	}.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StartupCleanup == nil || !bench.CleanupRequiresRestartBeforeMeasurement(result.StartupCleanup) {
+		t.Fatalf("startup cleanup = %#v", result.StartupCleanup)
+	}
+	if len(result.Samples) != 0 {
+		t.Fatalf("samples = %d, want 0", len(result.Samples))
+	}
+}
+
 func TestRunnerCleansRejectedSampleWithOrderRefs(t *testing.T) {
 	cleanup := &fakeCleanup{result: bench.CleanupResult{Attempted: true, OK: true, Description: "neutralize"}}
 	result, err := bench.Runner{
@@ -289,6 +311,25 @@ func (c *failingRunCleanup) BeforeRun(context.Context, bench.CleanupRun) bench.C
 }
 
 func (c *failingRunCleanup) AfterRun(context.Context, bench.Result) bench.CleanupResult {
+	return bench.CleanupResult{Attempted: false, OK: true}
+}
+
+type selfHealRunCleanup struct {
+	fakeCleanup
+}
+
+func (c *selfHealRunCleanup) BeforeRun(context.Context, bench.CleanupRun) bench.CleanupResult {
+	return bench.CleanupResult{
+		Attempted: true,
+		OK:        true,
+		Metadata: map[string]any{
+			bench.CleanupSelfHealPositionMetadataKey:         true,
+			bench.CleanupRestartBeforeMeasurementMetadataKey: true,
+		},
+	}
+}
+
+func (c *selfHealRunCleanup) AfterRun(context.Context, bench.Result) bench.CleanupResult {
 	return bench.CleanupResult{Attempted: false, OK: true}
 }
 

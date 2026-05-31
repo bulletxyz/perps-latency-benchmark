@@ -30,7 +30,7 @@ func dynamicPostOnlyPricingEnabled(params map[string]any) bool {
 		return true
 	}
 	switch normalizedParam(params, "post_only_price_source") {
-	case "book", "book_top", "top_of_book", "orderbook", "order_book", "http_l2book", "l2book_http", "hyperliquid_l2book_http":
+	case "book", "book_top", "top_of_book", "orderbook", "order_book", "http_l2book", "l2book_http", "hyperliquid_l2book_http", "nado_market_price_http", "market_price_http":
 		return true
 	default:
 		return false
@@ -38,12 +38,11 @@ func dynamicPostOnlyPricingEnabled(params map[string]any) bool {
 }
 
 func dynamicPostOnlyHTTPPricingEnabled(venue string, params map[string]any) bool {
-	if venue != "hyperliquid" {
-		return false
-	}
 	switch normalizedParam(params, "post_only_price_source") {
 	case "http_l2book", "l2book_http", "hyperliquid_l2book_http":
-		return true
+		return venue == "hyperliquid"
+	case "nado_market_price_http", "market_price_http":
+		return venue == "nado"
 	default:
 		return false
 	}
@@ -77,10 +76,10 @@ func dynamicPostOnlyHTTPPriceHook(venue string, params map[string]any, definitio
 	source := sharedHTTPBookSource(httpBookSourceConfig{
 		venue:   venue,
 		client:  &http.Client{Timeout: durationMSParam(params, "post_only_price_http_timeout_ms", defaultPostOnlyHTTPTimeoutMS)},
-		url:     dynamicPostOnlyInfoURL(params, definition, runtime),
-		symbol:  strings.ToUpper(spec.TextParam(runtime.Params, "symbol", "BTC")),
+		url:     dynamicPostOnlyHTTPURL(params, definition, runtime),
+		symbol:  dynamicPostOnlyHTTPSymbol(venue, runtime),
 		ttl:     durationMSParam(params, "post_only_price_refresh_ms", defaultPostOnlyHTTPRefreshMS),
-		parser:  booktop.NewHyperliquidParser(),
+		parser:  dynamicPostOnlyHTTPParser(venue),
 		cacheID: normalizedParam(params, "post_only_price_source"),
 	})
 	return func(ctx context.Context, req payload.Request) (map[string]any, map[string]any, error) {
@@ -95,7 +94,11 @@ func dynamicPostOnlyHTTPPriceHook(venue string, params map[string]any, definitio
 		}
 		price := cfg.price(snapshot, side)
 		effective["price"] = cfg.paramPrice(price)
-		metadata := dynamicPostOnlyMetadata(cfg, "hyperliquid_l2book_http", price, snapshot)
+		metadataSource := normalizedParam(params, "post_only_price_source")
+		if metadataSource == "" {
+			metadataSource = venue + "_http"
+		}
+		metadata := dynamicPostOnlyMetadata(cfg, metadataSource, price, snapshot)
 		metadata["post_only_price_refresh_ms"] = source.refresh().Milliseconds()
 		metadata["post_only_price_cached"] = cached
 		metadata["post_only_price_fetched_at"] = fetchedAt.Format(time.RFC3339Nano)
@@ -223,6 +226,7 @@ type httpBookSourceConfig struct {
 }
 
 type httpBookSource struct {
+	venue  string
 	client *http.Client
 	url    string
 	symbol string
@@ -243,6 +247,7 @@ func sharedHTTPBookSource(cfg httpBookSourceConfig) *httpBookSource {
 		return source
 	}
 	source := &httpBookSource{
+		venue:  cfg.venue,
 		client: cfg.client,
 		url:    cfg.url,
 		symbol: cfg.symbol,
@@ -256,7 +261,10 @@ func sharedHTTPBookSource(cfg httpBookSourceConfig) *httpBookSource {
 func (s *httpBookSource) update(cfg httpBookSourceConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.venue = cfg.venue
 	s.client = cfg.client
+	s.url = cfg.url
+	s.symbol = cfg.symbol
 	s.ttl = cfg.ttl
 	s.parser = cfg.parser
 }
@@ -285,10 +293,7 @@ func (s *httpBookSource) current(ctx context.Context) (booktop.Snapshot, time.Ti
 }
 
 func (s *httpBookSource) fetch(ctx context.Context) (booktop.Snapshot, error) {
-	if s.url == "" {
-		return booktop.Snapshot{}, fmt.Errorf("Hyperliquid info URL is empty")
-	}
-	body, err := json.Marshal(map[string]any{"type": "l2Book", "coin": s.symbol})
+	body, err := s.requestBody()
 	if err != nil {
 		return booktop.Snapshot{}, err
 	}
@@ -307,16 +312,32 @@ func (s *httpBookSource) fetch(ctx context.Context) (booktop.Snapshot, error) {
 		return booktop.Snapshot{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return booktop.Snapshot{}, fmt.Errorf("Hyperliquid l2Book HTTP status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return booktop.Snapshot{}, fmt.Errorf("%s HTTP book status %d: %s", s.venue, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	snapshot, ok := s.parser.Parse(raw)
 	if !ok {
-		return booktop.Snapshot{}, fmt.Errorf("Hyperliquid l2Book response did not contain a usable book")
+		return booktop.Snapshot{}, fmt.Errorf("%s HTTP book response did not contain a usable book", s.venue)
 	}
 	return snapshot, nil
 }
 
-func dynamicPostOnlyInfoURL(params map[string]any, definition spec.Definition, runtime spec.RuntimeConfig) string {
+func (s *httpBookSource) requestBody() ([]byte, error) {
+	if s.url == "" {
+		return nil, fmt.Errorf("%s HTTP book URL is empty", s.venue)
+	}
+	switch s.venue {
+	case "nado":
+		productID, err := strconv.Atoi(strings.TrimSpace(s.symbol))
+		if err != nil || productID <= 0 {
+			return nil, fmt.Errorf("Nado product_id is required for market_price pricing")
+		}
+		return json.Marshal(map[string]any{"type": "market_price", "product_id": productID})
+	default:
+		return json.Marshal(map[string]any{"type": "l2Book", "coin": s.symbol})
+	}
+}
+
+func dynamicPostOnlyHTTPURL(params map[string]any, definition spec.Definition, runtime spec.RuntimeConfig) string {
 	if raw := strings.TrimSpace(fmt.Sprint(params["post_only_price_url"])); raw != "" && raw != "<nil>" {
 		return raw
 	}
@@ -327,7 +348,24 @@ func dynamicPostOnlyInfoURL(params map[string]any, definition spec.Definition, r
 	if baseURL == "" {
 		baseURL = "https://api.hyperliquid.xyz"
 	}
+	if definition.Name == "nado" {
+		return baseURL + "/query"
+	}
 	return baseURL + "/info"
+}
+
+func dynamicPostOnlyHTTPSymbol(venue string, runtime spec.RuntimeConfig) string {
+	if venue == "nado" {
+		return spec.TextParam(runtime.Params, "product_id", "2")
+	}
+	return strings.ToUpper(spec.TextParam(runtime.Params, "symbol", "BTC"))
+}
+
+func dynamicPostOnlyHTTPParser(venue string) booktop.Parser {
+	if venue == "nado" {
+		return booktop.NewNadoMarketPriceParser()
+	}
+	return booktop.NewHyperliquidParser()
 }
 
 func roundToTick(value float64, tick float64, round func(float64) float64) float64 {

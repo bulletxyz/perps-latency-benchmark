@@ -24,6 +24,26 @@ export function confirmP95(row: SummaryRow, subtractNetworkFloor = false) {
   )
 }
 
+export function confirmP99(row: SummaryRow, subtractNetworkFloor = false) {
+  return summaryLatency(
+    row,
+    row.p99_ms,
+    row.raw_p99_ms,
+    row.network_adjusted_p99_ms,
+    subtractNetworkFloor
+  )
+}
+
+export function confirmP999(row: SummaryRow, subtractNetworkFloor = false) {
+  return summaryLatency(
+    row,
+    row.p999_ms,
+    row.raw_p999_ms,
+    row.network_adjusted_p999_ms,
+    subtractNetworkFloor
+  )
+}
+
 export function confirmSampleMs(sample: Sample, subtractNetworkFloor = false) {
   if (sample.confirm_ns && sample.confirm_ns > 0) {
     return nsToMs(
@@ -73,6 +93,20 @@ export function cancelP95(row: SummaryRow, subtractNetworkFloor = false) {
     return positiveMetric(row.network_adjusted_cleanup_p95_ms) ?? positiveMetric(row.cleanup_p95_ms)
   }
   return positiveMetric(row.cleanup_p95_ms)
+}
+
+export function cancelP99(row: SummaryRow, subtractNetworkFloor = false) {
+  if (subtractNetworkFloor) {
+    return positiveMetric(row.network_adjusted_cleanup_p99_ms) ?? positiveMetric(row.cleanup_p99_ms)
+  }
+  return positiveMetric(row.cleanup_p99_ms)
+}
+
+export function cancelP999(row: SummaryRow, subtractNetworkFloor = false) {
+  if (subtractNetworkFloor) {
+    return positiveMetric(row.network_adjusted_cleanup_p999_ms) ?? positiveMetric(row.cleanup_p999_ms)
+  }
+  return positiveMetric(row.cleanup_p999_ms)
 }
 
 export function isCancelCleanup(sample: Sample) {

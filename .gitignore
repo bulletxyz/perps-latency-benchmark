@@ -20,6 +20,7 @@ __pycache__/
 .DS_Store
 coverage.out
 bin/
+/perps-bench
 /build/
 dist/
 node_modules/
