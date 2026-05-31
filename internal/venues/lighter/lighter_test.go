@@ -113,3 +113,34 @@ func TestClassifyPreservesLighterErrorMessage(t *testing.T) {
 		t.Fatalf("reason = %q", classification.Reason)
 	}
 }
+
+func TestRuntimeAPIKeyIndexPrefersPrefixedDefaultForAutoRole(t *testing.T) {
+	t.Setenv("LIGHTER_API_KEY_INDEX", "2")
+	t.Setenv("LIGHTER_FREE_API_KEY_INDEX", "4")
+
+	got := lighterRuntimeAPIKeyIndex(map[string]any{
+		"env_prefix": "LIGHTER_FREE",
+	})
+	if got != "4" {
+		t.Fatalf("lighterRuntimeAPIKeyIndex() = %q, want prefixed default key 4", got)
+	}
+}
+
+func TestRuntimeAPIKeyIndexUsesRoleSpecificKeys(t *testing.T) {
+	t.Setenv("LIGHTER_API_KEY_INDEX", "4")
+	t.Setenv("LIGHTER_MAKER_API_KEY_INDEX", "5")
+	t.Setenv("LIGHTER_TAKER_API_KEY_INDEX", "6")
+
+	maker := lighterRuntimeAPIKeyIndex(map[string]any{"api_key_role": "maker"})
+	if maker != "5" {
+		t.Fatalf("maker key = %q, want 5", maker)
+	}
+
+	taker := lighterRuntimeAPIKeyIndex(map[string]any{
+		"order_type":    1,
+		"time_in_force": 0,
+	})
+	if taker != "6" {
+		t.Fatalf("taker key = %q, want 6", taker)
+	}
+}

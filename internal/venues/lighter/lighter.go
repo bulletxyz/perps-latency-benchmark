@@ -166,9 +166,9 @@ func lighterRuntimeAPIKeyIndex(params map[string]any) string {
 	}
 	switch role {
 	case "maker":
-		return firstRuntimeParam(params, "maker_api_key_index", "LIGHTER_MAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
+		return firstRuntimeRoleParam(params, "maker_api_key_index", "api_key_index", "LIGHTER_MAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
 	case "taker":
-		return firstRuntimeParam(params, "taker_api_key_index", "LIGHTER_TAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
+		return firstRuntimeRoleParam(params, "taker_api_key_index", "api_key_index", "LIGHTER_TAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
 	default:
 		return runtimeParam(params, "api_key_index", "LIGHTER_API_KEY_INDEX")
 	}
@@ -196,6 +196,27 @@ func firstRuntimeParam(params map[string]any, key string, envKeys ...string) str
 	}
 	if text := runtimePrefixedEnv(params, key); text != "" {
 		return text
+	}
+	for _, envKey := range envKeys {
+		text := strings.TrimSpace(os.Getenv(envKey))
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func firstRuntimeRoleParam(params map[string]any, roleKey string, defaultKey string, envKeys ...string) string {
+	for _, key := range []string{roleKey, defaultKey} {
+		if value, ok := params[key]; ok && value != nil {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" {
+				return text
+			}
+		}
+		if text := runtimePrefixedEnv(params, key); text != "" {
+			return text
+		}
 	}
 	for _, envKey := range envKeys {
 		text := strings.TrimSpace(os.Getenv(envKey))

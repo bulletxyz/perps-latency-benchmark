@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from cleanup_common import cleanup_orders_for_venue, cleanup_result, flat_position_guard, guard_preexisting_position, mark_self_heal_position, result_orders_for_venue, self_heal_preexisting_position
-from build_payload import compact_json, env_or_param, next_nonce, order_index
+from build_payload import api_key_material, benchmark_order_type_from_values, compact_json, env_or_param, next_nonce, order_index
 
 
 def main() -> int:
@@ -39,9 +39,9 @@ async def serve(lighter: Any) -> None:
 async def build(req: dict[str, Any], lighter: Any) -> dict[str, Any]:
     params = dict(req.get("params") or {})
     builder_params = dict(params.get("builder_params") or {})
-    api_key_index = int(env_or_param(builder_params, "api_key_index", "LIGHTER_API_KEY_INDEX"))
+    order_type = benchmark_order_type_from_values(builder_params)
+    api_key_index, private_key, _api_key_role = api_key_material(builder_params, order_type)
     account_index = int(env_or_param(builder_params, "account_index", "LIGHTER_ACCOUNT_INDEX"))
-    private_key = env_or_param(builder_params, "private_key", "LIGHTER_PRIVATE_KEY")
 
     client = lighter.SignerClient(
         url=builder_params.get("base_url", "https://mainnet.zklighter.elliot.ai"),

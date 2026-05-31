@@ -51,3 +51,9 @@ overrides the signer.
 A Venue Account is the exchange account whose collateral, positions, orders, and
 API keys are used by benchmark runs. Low-balance funding decisions are made per
 Venue Account.
+
+## Lighter API Key Role
+
+A Lighter API Key Role selects the maker, taker, or default trading API key for
+a Lighter Venue Account. Order submission, cleanup, reconciliation, and run locks
+must resolve the same role so each live runner owns one nonce stream.
