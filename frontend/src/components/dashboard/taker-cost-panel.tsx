@@ -19,7 +19,12 @@ import {
 
 import type { Sample } from "@/api/bench"
 import { colorForVenue } from "@/components/charts/latency-timeseries-chart"
-import { VenueName } from "@/components/dashboard/venue-logo"
+import {
+  CSVExportButton,
+  type CSVColumn,
+  type CSVWindowOption,
+} from "@/components/dashboard/csv-export-button"
+import { VenueLogo, VenueName } from "@/components/dashboard/venue-logo"
 import {
   formatAbsBps,
   formatBps,
@@ -64,9 +69,26 @@ const COST_MODE_COPY: Record<CostChartMode, { description: string; title: string
   },
 }
 
-export function TakerCostPanel({ samples }: { samples: Array<Sample> }) {
+export function TakerCostPanel({
+  defaultExportWindow,
+  exportWindowOptions,
+  isLoading = false,
+  loadExportSamples,
+  samples,
+  showExports = true,
+}: {
+  defaultExportWindow?: string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
+  isLoading?: boolean
+  loadExportSamples?: (window: string) => Promise<Array<Sample>>
+  samples: Array<Sample>
+  showExports?: boolean
+}) {
   const [chartMode, setChartMode] = useState<CostChartMode>("total")
-  const records = useMemo(() => buildTakerCostRecords(samples), [samples])
+  const records = useMemo(
+    () => buildTakerCostRecords(samples),
+    [samples]
+  )
   const stable = useMemo(() => stableCostWindow(records), [records])
   const slippage = useMemo(() => summarizeSlippage(stable.records), [stable.records])
   const cheapestVenue = useMemo(
@@ -78,6 +100,19 @@ export function TakerCostPanel({ samples }: { samples: Array<Sample> }) {
     [slippage]
   )
   const benchmarkSize = useMemo(() => formatBenchmarkSize(stable.records), [stable.records])
+
+  if (isLoading) {
+    return (
+      <section
+        className="flex min-h-32 flex-col items-center justify-center gap-3 rounded-sm border border-border/80 bg-surface-1 p-3 text-[11px] text-muted-foreground"
+        aria-label="Loading taker cost data"
+        role="status"
+      >
+        <div className="size-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+        <span>Loading taker cost data</span>
+      </section>
+    )
+  }
 
   if (records.length === 0) {
     return (
@@ -120,11 +155,21 @@ export function TakerCostPanel({ samples }: { samples: Array<Sample> }) {
 
       <div className="grid min-w-0 gap-3 border-b border-border/80 p-3 xl:grid-cols-2">
         <CostChart
+          defaultExportWindow={defaultExportWindow}
+          exportWindowOptions={exportWindowOptions}
+          loadExportSamples={loadExportSamples}
           mode={chartMode}
           onModeChange={setChartMode}
           records={stable.records}
+          showExport={showExports}
         />
-        <VenueCostBars rows={slippage} />
+        <VenueCostBars
+          defaultExportWindow={defaultExportWindow}
+          exportWindowOptions={exportWindowOptions}
+          loadExportSamples={loadExportSamples}
+          rows={slippage}
+          showExport={showExports}
+        />
       </div>
 
       <div className="grid min-w-0 gap-3 p-3">
@@ -156,13 +201,21 @@ function CostStat({
 }
 
 function CostChart({
+  defaultExportWindow,
+  exportWindowOptions,
+  loadExportSamples,
   mode,
   onModeChange,
   records,
+  showExport,
 }: {
+  defaultExportWindow?: string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
+  loadExportSamples?: (window: string) => Promise<Array<Sample>>
   mode: CostChartMode
   onModeChange: (mode: CostChartMode) => void
   records: Array<TakerCostRecord>
+  showExport: boolean
 }) {
   const [displayMode, setDisplayMode] = useState<CostDisplayMode>("trend-raw")
   const [hideOutliers, setHideOutliers] = useState(true)
@@ -178,6 +231,26 @@ function CostChart({
           <p className="mt-1 max-w-[520px] text-[10px] text-muted-foreground">{copy.description}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {showExport ? (
+            <CSVExportButton
+              columns={TAKER_COST_EXPORT_COLUMNS}
+              defaultWindow={defaultExportWindow}
+              filename="taker-cost-rounds-data.csv"
+              filenameForWindow={(window) => `taker-cost-rounds-${window}.csv`}
+              loadRows={
+                loadExportSamples
+                  ? async (window) =>
+                      takerCostExportRows(
+                        stableCostWindow(
+                          buildTakerCostRecords(await loadExportSamples(window))
+                        ).records
+                      )
+                  : undefined
+              }
+              rows={takerCostExportRows(records)}
+              windowOptions={exportWindowOptions}
+            />
+          ) : null}
           {showRoundControls ? (
             <>
               <CostDisplayModeToggle value={displayMode} onChange={setDisplayMode} />
@@ -351,7 +424,19 @@ function CostModeToggle({
   )
 }
 
-function VenueCostBars({ rows }: { rows: ReturnType<typeof summarizeSlippage> }) {
+function VenueCostBars({
+  defaultExportWindow,
+  exportWindowOptions,
+  loadExportSamples,
+  rows,
+  showExport,
+}: {
+  defaultExportWindow?: string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
+  loadExportSamples?: (window: string) => Promise<Array<Sample>>
+  rows: ReturnType<typeof summarizeSlippage>
+  showExport: boolean
+}) {
   const ordered = [...rows].sort((left, right) => left.meanCostUSD - right.meanCostUSD)
   const extent = costExtent(ordered.map((row) => row.meanCostUSD))
   const range = Math.max(extent.max - extent.min, 0.001)
@@ -359,11 +444,35 @@ function VenueCostBars({ rows }: { rows: ReturnType<typeof summarizeSlippage> })
 
   return (
     <div className="min-h-[300px] min-w-0 overflow-hidden">
-      <div className="mb-2">
-        <h3 className="font-sans text-xs font-semibold">Average Round Cost by Venue</h3>
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          Average cost for one open and close sequence.
-        </p>
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="font-sans text-xs font-semibold">Average Round Cost by Venue</h3>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Average cost for one open and close sequence.
+          </p>
+        </div>
+        {showExport ? (
+          <CSVExportButton
+            columns={VENUE_COST_EXPORT_COLUMNS}
+            defaultWindow={defaultExportWindow}
+            filename="taker-cost-venue-summary-data.csv"
+            filenameForWindow={(window) =>
+              `taker-cost-venue-summary-${window}.csv`
+            }
+            loadRows={
+              loadExportSamples
+                ? async (window) =>
+                    summarizeSlippage(
+                      stableCostWindow(
+                        buildTakerCostRecords(await loadExportSamples(window))
+                      ).records
+                    )
+                : undefined
+            }
+            rows={ordered}
+            windowOptions={exportWindowOptions}
+          />
+        ) : null}
       </div>
       <div className="space-y-2 pt-4">
         {ordered.map((row) => (
@@ -397,6 +506,109 @@ function VenueCostBars({ rows }: { rows: ReturnType<typeof summarizeSlippage> })
       </div>
     </div>
   )
+}
+
+interface TakerCostExportRow {
+  actualCostGapUSD?: number
+  balanceDiffUSD?: number
+  completedAt?: string
+  entryActualPrice?: number
+  entryExpectedPrice?: number
+  entryFeeUSD: number
+  entryQty?: number
+  entrySlippageBps?: number
+  entrySlippageUSD?: number
+  exitActualPrice?: number
+  exitExpectedPrice?: number
+  exitFeeUSD: number
+  exitQty?: number
+  exitSlippageBps?: number
+  exitSlippageUSD?: number
+  expectedRoundTripCostUSD?: number
+  netTradingCostUSD: number
+  plotAt: Date
+  priceMoveCostUSD: number
+  totalFeesUSD: number
+  totalSlippageBps?: number
+  totalSlippageUSD?: number
+  tradeCostUSD: number
+  venue: string
+}
+
+const TAKER_COST_EXPORT_COLUMNS: Array<CSVColumn<TakerCostExportRow>> = [
+  { header: "plot_at", value: (row) => row.plotAt },
+  { header: "completed_at", value: (row) => row.completedAt },
+  { header: "venue", value: (row) => row.venue },
+  { header: "trade_cost_usd", value: (row) => row.tradeCostUSD },
+  { header: "net_trading_cost_usd", value: (row) => row.netTradingCostUSD },
+  { header: "total_fees_usd", value: (row) => row.totalFeesUSD },
+  { header: "entry_fee_usd", value: (row) => row.entryFeeUSD },
+  { header: "exit_fee_usd", value: (row) => row.exitFeeUSD },
+  { header: "price_move_cost_usd", value: (row) => row.priceMoveCostUSD },
+  { header: "total_slippage_usd", value: (row) => row.totalSlippageUSD },
+  { header: "total_slippage_bps", value: (row) => row.totalSlippageBps },
+  { header: "entry_slippage_usd", value: (row) => row.entrySlippageUSD },
+  { header: "entry_slippage_bps", value: (row) => row.entrySlippageBps },
+  { header: "exit_slippage_usd", value: (row) => row.exitSlippageUSD },
+  { header: "exit_slippage_bps", value: (row) => row.exitSlippageBps },
+  { header: "entry_actual_price", value: (row) => row.entryActualPrice },
+  { header: "entry_expected_price", value: (row) => row.entryExpectedPrice },
+  { header: "exit_actual_price", value: (row) => row.exitActualPrice },
+  { header: "exit_expected_price", value: (row) => row.exitExpectedPrice },
+  {
+    header: "expected_round_trip_cost_usd",
+    value: (row) => row.expectedRoundTripCostUSD,
+  },
+  { header: "actual_cost_gap_usd", value: (row) => row.actualCostGapUSD },
+  { header: "balance_diff_usd", value: (row) => row.balanceDiffUSD },
+  { header: "entry_qty", value: (row) => row.entryQty },
+  { header: "exit_qty", value: (row) => row.exitQty },
+]
+
+const VENUE_COST_EXPORT_COLUMNS: Array<
+  CSVColumn<ReturnType<typeof summarizeSlippage>[number]>
+> = [
+  { header: "venue", value: (row) => row.venue },
+  { header: "sample_count", value: (row) => row.sampleCount },
+  { header: "mean_cost_usd", value: (row) => row.meanCostUSD },
+  { header: "mean_fill_cost_usd", value: (row) => row.meanFillCostUSD },
+  { header: "total_cost_usd", value: (row) => row.totalCostUSD },
+  { header: "fee_mean_per_fill_usd", value: (row) => row.feeMeanPerFillUSD },
+  { header: "price_move_mean_usd", value: (row) => row.priceMoveMeanUSD },
+  { header: "entry_mean_bps", value: (row) => row.entryMeanBps },
+  { header: "exit_mean_bps", value: (row) => row.exitMeanBps },
+  { header: "total_slippage_mean_bps", value: (row) => row.totalSlippageMeanBps },
+  { header: "total_slippage_p95_bps", value: (row) => row.totalSlippageP95Bps },
+  { header: "cost_gap_mean_usd", value: (row) => row.costGapMeanUSD },
+]
+
+function takerCostExportRows(records: Array<TakerCostRecord>) {
+  return records.map((record): TakerCostExportRow => ({
+    actualCostGapUSD: record.actualCostGapUSD,
+    balanceDiffUSD: record.balanceDiffUSD,
+    completedAt: record.sample.completed_at,
+    entryActualPrice: record.entryActualPrice,
+    entryExpectedPrice: record.entryExpectedPrice,
+    entryFeeUSD: record.entryFeeUSD,
+    entryQty: record.cost.entry_qty,
+    entrySlippageBps: record.entrySlippageBps,
+    entrySlippageUSD: record.entrySlippageUSD,
+    exitActualPrice: record.exitActualPrice,
+    exitExpectedPrice: record.exitExpectedPrice,
+    exitFeeUSD: record.exitFeeUSD,
+    exitQty: record.cost.exit_qty,
+    exitSlippageBps: record.exitSlippageBps,
+    exitSlippageUSD: record.exitSlippageUSD,
+    expectedRoundTripCostUSD: record.expectedRoundTripCostUSD,
+    netTradingCostUSD: netTradingCostUSD(record),
+    plotAt: record.date,
+    priceMoveCostUSD: record.priceMoveCostUSD,
+    totalFeesUSD: tradingFeesUSD(record),
+    totalSlippageBps: record.totalSlippageBps,
+    totalSlippageUSD: record.totalSlippageUSD,
+    tradeCostUSD: record.tradeCostUSD,
+    venue: record.venue,
+  }))
 }
 
 function CostChartFrame({
@@ -508,7 +720,7 @@ function CostChartFrame({
             scale={yScale}
             numTicks={5}
             width={innerWidth}
-            stroke="oklch(0.88 0.004 255 / 0.7)"
+            stroke="var(--chart-grid)"
             strokeDasharray="3 4"
           />
           {zeroY >= 0 && zeroY <= innerHeight ? (
@@ -517,7 +729,7 @@ function CostChartFrame({
               x2={innerWidth}
               y1={zeroY}
               y2={zeroY}
-              stroke="oklch(0.62 0.02 253)"
+              stroke="var(--chart-reference)"
               strokeWidth={1}
             />
           ) : null}
@@ -526,13 +738,13 @@ function CostChartFrame({
             numTicks={5}
             tickFormat={(value) => formatUSD(Number(value))}
             tickLabelProps={() => ({
-              fill: "oklch(0.48 0.015 253)",
+              fill: "var(--chart-text)",
               fontFamily: "JetBrains Mono Variable",
               fontSize: 10,
               textAnchor: "end",
             })}
-            stroke="oklch(0.9 0.004 255)"
-            tickStroke="oklch(0.9 0.004 255)"
+            stroke="var(--chart-axis)"
+            tickStroke="var(--chart-axis)"
           />
           <AxisBottom
             top={innerHeight}
@@ -540,13 +752,13 @@ function CostChartFrame({
             numTicks={xTickCount}
             tickFormat={(value) => formatTime(new Date(value.valueOf()))}
             tickLabelProps={() => ({
-              fill: "oklch(0.48 0.015 253)",
+              fill: "var(--chart-text)",
               fontFamily: "JetBrains Mono Variable",
               fontSize: 10,
               textAnchor: "middle",
             })}
-            stroke="oklch(0.9 0.004 255)"
-            tickStroke="oklch(0.9 0.004 255)"
+            stroke="var(--chart-axis)"
+            tickStroke="var(--chart-axis)"
           />
           <rect
             width={innerWidth}
@@ -1025,8 +1237,11 @@ function formatAverageCostVenue(value: string) {
   if (value === "lighter") {
     return (
       <span className="inline-flex min-w-0 items-start gap-2">
-        <VenueName label="Lighter Premium" venue={value} />
-        <span className="block text-muted-foreground/80">base tier</span>
+        <VenueLogo venue={value} />
+        <span className="min-w-0">
+          <span className="block whitespace-nowrap">Lighter Premium</span>
+          <span className="block text-muted-foreground/80">base tier</span>
+        </span>
       </span>
     )
   }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"perps-latency-benchmark/internal/accountfeed"
 	"perps-latency-benchmark/internal/bench"
 	"perps-latency-benchmark/internal/booktop"
 	costadapter "perps-latency-benchmark/internal/cost"
@@ -45,6 +46,8 @@ type coordinatedRunItem struct {
 	cost       *costadapter.CommandAdapter
 	bookCancel context.CancelFunc
 }
+
+const coordinatedPreCycleCleanupLead = 30 * time.Second
 
 func newRunCoordinatedCommand() *cobra.Command {
 	opts := &coordinatedOptions{}
@@ -96,7 +99,9 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 		runID = bench.NewRunID()
 	}
 
-	items, benchItems, err := buildCoordinatedItems(ctx, opts, runID)
+	feedPool := accountfeed.NewPool()
+	runCtx := accountfeed.WithPool(ctx, feedPool)
+	items, benchItems, err := buildCoordinatedItems(runCtx, opts, runID, feedPool)
 	if err != nil {
 		return err
 	}
@@ -108,13 +113,8 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 	}
 	defer db.Close()
 
-	startupCleanup := bench.BeforeCoordinatedRun(ctx, benchItems, runID)
-	for _, item := range benchItems {
-		cleanup := startupCleanup[item.Venue.Name()]
-		if cleanup == nil || cleanup.OK || item.Config.Cleanup.Mode != bench.CleanupModeStrict {
-			continue
-		}
-		return fmt.Errorf("%s startup cleanup failed: %s", item.Venue.Name(), cleanupErrorText(cleanup))
+	if err := coordinatedStrictStartupCleanupError(bench.BeforeCoordinatedRun(runCtx, benchItems, runID), benchItems, "startup"); err != nil {
+		return err
 	}
 	retainedSamples := make([]bench.Sample, 0, coordinatedSampleRetentionLimit(opts, len(benchItems)))
 	for cycleIndex := 0; ; cycleIndex++ {
@@ -123,7 +123,7 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 		}
 		select {
 		case <-ctx.Done():
-			_ = bench.AfterCoordinatedRun(ctx, benchItems, runID, retainedSamples)
+			_ = bench.AfterCoordinatedRun(runCtx, benchItems, runID, retainedSamples)
 			return nil
 		default:
 		}
@@ -131,15 +131,23 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 		iteration := cycleIndex - opts.warmupCycles
 		target := nextCoordinatedBoundary(time.Now(), opts.interval)
 		prepareAt := target.Add(-opts.prepareLead)
-		if err := sleepUntil(ctx, prepareAt); err != nil {
-			_ = bench.AfterCoordinatedRun(ctx, benchItems, runID, retainedSamples)
+		cleanupAt := prepareAt.Add(-coordinatedPreCycleCleanupLead)
+		if err := sleepUntil(ctx, cleanupAt); err != nil {
+			_ = bench.AfterCoordinatedRun(runCtx, benchItems, runID, retainedSamples)
 			return nil
 		}
-		if ok := coordinatedRateLimitPreflight(ctx, cmd, items, opts.interval); !ok {
+		if err := coordinatedStrictStartupCleanupError(bench.BeforeCoordinatedRun(runCtx, benchItems, runID), benchItems, "pre-cycle"); err != nil {
+			return err
+		}
+		if err := sleepUntil(ctx, prepareAt); err != nil {
+			_ = bench.AfterCoordinatedRun(runCtx, benchItems, runID, retainedSamples)
+			return nil
+		}
+		if ok := coordinatedRateLimitPreflight(runCtx, cmd, items, opts.interval); !ok {
 			continue
 		}
-		balancesBefore := coordinatedBalances(ctx, cmd, items)
-		samples := bench.RunCoordinatedCycle(ctx, benchItems, bench.CoordinatedCycle{
+		balancesBefore := coordinatedBalances(runCtx, cmd, items)
+		samples := bench.RunCoordinatedCycle(runCtx, benchItems, bench.CoordinatedCycle{
 			Index:       cycleIndex,
 			Iteration:   iteration,
 			Warmup:      warmup,
@@ -151,7 +159,7 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 		if err := db.WriteSamples(ctx, coordinatedSampleRecords(samples, items)); err != nil {
 			return err
 		}
-		if err := writeCoordinatedCosts(ctx, cmd, db, items, samples, balancesBefore); err != nil {
+		if err := writeCoordinatedCosts(runCtx, cmd, db, items, samples, balancesBefore); err != nil {
 			return err
 		}
 		if opts.retainHours > 0 {
@@ -163,8 +171,15 @@ func runCoordinated(ctx context.Context, cmd *cobra.Command, opts *coordinatedOp
 		if err := coordinatedStrictCleanupError(samples, benchItems); err != nil {
 			return err
 		}
+		reconciliation := bench.AfterCoordinatedRun(runCtx, benchItems, runID, retainedSamples)
+		if err := coordinatedStrictRunCleanupError(reconciliation, benchItems); err != nil {
+			return err
+		}
 	}
-	_ = bench.AfterCoordinatedRun(ctx, benchItems, runID, retainedSamples)
+	reconciliation := bench.AfterCoordinatedRun(runCtx, benchItems, runID, retainedSamples)
+	if err := coordinatedStrictRunCleanupError(reconciliation, benchItems); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -212,6 +227,40 @@ func coordinatedStrictCleanupError(samples []bench.Sample, items []bench.Coordin
 	return nil
 }
 
+func coordinatedStrictStartupCleanupError(results map[string]*bench.CleanupResult, items []bench.CoordinatedItem, phase string) error {
+	for _, item := range items {
+		cleanup := results[item.Venue.Name()]
+		if cleanup == nil || item.Config.Cleanup.Mode != bench.CleanupModeStrict {
+			continue
+		}
+		if bench.CleanupRequiresRestartBeforeMeasurement(cleanup) {
+			if bench.IsPositionSelfHealCleanup(cleanup) {
+				return fmt.Errorf("%s %s cleanup repaired preexisting position; restarting before measuring", item.Venue.Name(), phase)
+			}
+			return fmt.Errorf("%s %s cleanup repaired stale state; restarting before measuring", item.Venue.Name(), phase)
+		}
+		if cleanup.OK {
+			continue
+		}
+		return fmt.Errorf("%s %s cleanup failed: %s", item.Venue.Name(), phase, cleanupErrorText(cleanup))
+	}
+	return nil
+}
+
+func coordinatedStrictRunCleanupError(results map[string]*bench.CleanupResult, items []bench.CoordinatedItem) error {
+	strict := make(map[string]bool, len(items))
+	for _, item := range items {
+		strict[item.Venue.Name()] = item.Config.Cleanup.Mode == bench.CleanupModeStrict
+	}
+	for venue, cleanup := range results {
+		if !strict[venue] || cleanup == nil || cleanup.OK {
+			continue
+		}
+		return fmt.Errorf("%s reconciliation failed: %s", venue, cleanupErrorText(cleanup))
+	}
+	return nil
+}
+
 func cleanupErrorText(cleanup *bench.CleanupResult) string {
 	if cleanup == nil {
 		return "unknown cleanup failure"
@@ -225,8 +274,7 @@ func cleanupErrorText(cleanup *bench.CleanupResult) string {
 	return "unknown cleanup failure"
 }
 
-func buildCoordinatedItems(ctx context.Context, opts *coordinatedOptions, runID string) ([]coordinatedRunItem, []bench.CoordinatedItem, error) {
-	_ = ctx
+func buildCoordinatedItems(ctx context.Context, opts *coordinatedOptions, runID string, feedPool *accountfeed.Pool) ([]coordinatedRunItem, []bench.CoordinatedItem, error) {
 	items := make([]coordinatedRunItem, 0, len(opts.configPaths))
 	benchItems := make([]bench.CoordinatedItem, 0, len(opts.configPaths))
 	fail := func(err error) ([]coordinatedRunItem, []bench.CoordinatedItem, error) {
@@ -250,7 +298,7 @@ func buildCoordinatedItems(ctx context.Context, opts *coordinatedOptions, runID 
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", venueName, err))
 		}
-		resources, err := buildRunResources(ctx, venueName, cfg, runID)
+		resources, err := buildRunResources(ctx, venueName, cfg, runID, feedPool)
 		if err != nil {
 			lock.Release()
 			return fail(fmt.Errorf("%s: %w", venueName, err))

@@ -163,7 +163,7 @@ func (a *CommandAdapter) BeforeRun(ctx context.Context, run bench.CleanupRun) be
 
 func (a *CommandAdapter) AfterRun(ctx context.Context, result bench.Result) bench.CleanupResult {
 	start := time.Now()
-	return a.run(ctx, start, payload.Request{
+	req := payload.Request{
 		Venue:     result.Venue,
 		Scenario:  result.Scenario,
 		BatchSize: 1,
@@ -173,7 +173,15 @@ func (a *CommandAdapter) AfterRun(ctx context.Context, result bench.Result) benc
 			"run_metadata":   a.currentRunMetadata(),
 			"builder_params": a.cfg.StaticParams,
 		},
-	})
+	}
+	prepared, err := a.prepare(ctx, start, req)
+	if err != nil {
+		return cleanupError(start, err)
+	}
+	prepared = a.withRetryableCleanup(req, prepared)
+	cleanup := runPreparedCleanup(ctx, prepared)
+	cleanup.PreparedNS = prepared.PreparedNS
+	return cleanup
 }
 
 func (a *CommandAdapter) run(ctx context.Context, start time.Time, req payload.Request) bench.CleanupResult {
@@ -265,6 +273,10 @@ func (a *CommandAdapter) execution() cleanupExecution {
 }
 
 func (a *CommandAdapter) withRetryableAfterSampleCleanup(req payload.Request, prepared bench.PreparedCleanup) bench.PreparedCleanup {
+	return a.withRetryableCleanup(req, prepared)
+}
+
+func (a *CommandAdapter) withRetryableCleanup(req payload.Request, prepared bench.PreparedCleanup) bench.PreparedCleanup {
 	if prepared.Result != nil || prepared.Execute == nil {
 		return prepared
 	}

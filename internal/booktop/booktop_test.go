@@ -67,6 +67,15 @@ func TestVenueParsersParseTopOfBook(t *testing.T) {
 			bids:  1,
 			asks:  1,
 		},
+		{
+			name:  "nado-market-price",
+			venue: "nado",
+			data:  `{"status":"success","data":{"product_id":2,"bid_x18":"100000000000000000000","ask_x18":"101000000000000000000","bid_qty":"5000000000000000000","ask_qty":"3000000000000000000"}}`,
+			bid:   100,
+			ask:   101,
+			bids:  1,
+			asks:  1,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -75,6 +84,7 @@ func TestVenueParsersParseTopOfBook(t *testing.T) {
 				"aster":       NewAsterParser(),
 				"lighter":     NewLighterParser(),
 				"pacifica":    NewPacificaParser(),
+				"nado":        NewNadoMarketPriceParser(),
 			}[test.venue]
 			snapshot, ok := parser.Parse([]byte(test.data))
 			if !ok {

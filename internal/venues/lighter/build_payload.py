@@ -104,11 +104,11 @@ def api_key_material(params: dict[str, Any], order_type: str) -> tuple[int, str,
         )
 
     if role == "maker":
-        api_key_index = first_value(params, "maker_api_key_index", "LIGHTER_MAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
-        private_key = first_value(params, "maker_private_key", "LIGHTER_MAKER_PRIVATE_KEY", "LIGHTER_PRIVATE_KEY")
+        api_key_index = first_role_value(params, "maker_api_key_index", "api_key_index", "LIGHTER_MAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
+        private_key = first_role_value(params, "maker_private_key", "private_key", "LIGHTER_MAKER_PRIVATE_KEY", "LIGHTER_PRIVATE_KEY")
     elif role == "taker":
-        api_key_index = first_value(params, "taker_api_key_index", "LIGHTER_TAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
-        private_key = first_value(params, "taker_private_key", "LIGHTER_TAKER_PRIVATE_KEY", "LIGHTER_PRIVATE_KEY")
+        api_key_index = first_role_value(params, "taker_api_key_index", "api_key_index", "LIGHTER_TAKER_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX")
+        private_key = first_role_value(params, "taker_private_key", "private_key", "LIGHTER_TAKER_PRIVATE_KEY", "LIGHTER_PRIVATE_KEY")
     else:
         api_key_index = first_value(params, "api_key_index", "LIGHTER_API_KEY_INDEX")
         private_key = first_value(params, "private_key", "LIGHTER_PRIVATE_KEY")
@@ -277,13 +277,30 @@ def order_expiry(client: Any, params: dict[str, Any]) -> int:
 
 
 def benchmark_order_type(client: Any, params: dict[str, Any]) -> str:
-    order_type = int(params.get("order_type", client.ORDER_TYPE_LIMIT))
-    time_in_force = int(params.get("time_in_force", client.ORDER_TIME_IN_FORCE_POST_ONLY))
-    if order_type == client.ORDER_TYPE_MARKET:
+    return benchmark_order_type_from_values(
+        params,
+        order_type_limit=client.ORDER_TYPE_LIMIT,
+        order_type_market=client.ORDER_TYPE_MARKET,
+        time_in_force_post_only=client.ORDER_TIME_IN_FORCE_POST_ONLY,
+        time_in_force_ioc=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+    )
+
+
+def benchmark_order_type_from_values(
+    params: dict[str, Any],
+    *,
+    order_type_limit: int = 0,
+    order_type_market: int = 1,
+    time_in_force_post_only: int = 2,
+    time_in_force_ioc: int = 0,
+) -> str:
+    order_type = int(params.get("order_type", order_type_limit))
+    time_in_force = int(params.get("time_in_force", time_in_force_post_only))
+    if order_type == order_type_market:
         return "market"
-    if time_in_force == client.ORDER_TIME_IN_FORCE_POST_ONLY:
+    if time_in_force == time_in_force_post_only:
         return "post_only"
-    if time_in_force == client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL:
+    if time_in_force == time_in_force_ioc:
         return "ioc"
     return "limit"
 
@@ -369,6 +386,24 @@ def first_value(params: dict[str, Any], key: str, *env_keys: str) -> str:
     prefixed = prefixed_env_name(params, key)
     candidates = [item for item in [prefixed, *env_keys] if item]
     raise SystemExit(f"missing {key}; set params.{key} or one of {', '.join(candidates)}")
+
+
+def first_role_value(params: dict[str, Any], role_key: str, default_key: str, *env_keys: str) -> str:
+    for key in (role_key, default_key):
+        value = params.get(key)
+        if value not in (None, ""):
+            return str(value)
+        value = prefixed_env(params, key)
+        if value not in (None, ""):
+            return str(value)
+    for env_key in env_keys:
+        value = os.getenv(env_key)
+        if value not in (None, ""):
+            return str(value)
+    role_prefixed = prefixed_env_name(params, role_key)
+    default_prefixed = prefixed_env_name(params, default_key)
+    candidates = [item for item in [role_prefixed, default_prefixed, *env_keys] if item]
+    raise SystemExit(f"missing {role_key}; set params.{role_key}, params.{default_key}, or one of {', '.join(candidates)}")
 
 
 def prefixed_env(params: dict[str, Any], key: str) -> str | None:

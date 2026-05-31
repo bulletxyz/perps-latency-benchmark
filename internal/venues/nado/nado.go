@@ -42,7 +42,7 @@ func Definition() spec.Definition {
 				"product_id":      2,
 				"symbol":          "BTC-PERP",
 				"side":            "buy",
-				"amount":          "0.0014",
+				"amount":          "0.0016",
 				"price":           "77000",
 				"order_type":      "post_only",
 				"subaccount":      "default",

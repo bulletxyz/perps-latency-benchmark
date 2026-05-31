@@ -39,6 +39,15 @@ class LighterCancelPayloadTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             cancel_payload.neutralize_base_amount(Decimal("0.000001"), {"base_amount_decimals": 5})
 
+    def test_neutralize_price_prefers_side_specific_price(self):
+        self.assertEqual(
+            cancel_payload.neutralize_price(
+                {"price": 1500000, "neutralize_buy_price": 1500000, "neutralize_sell_price": 500000},
+                False,
+            ),
+            500000,
+        )
+
     def test_cancel_orders_include_websocket_batch_payload(self):
         class Client:
             def create_auth_token_with_expiry(self, **_kwargs):
@@ -98,6 +107,78 @@ class LighterCancelPayloadTest(unittest.TestCase):
         self.assertEqual(built["cleanup"]["ok"], True)
         self.assertEqual(SignerClientStub.last_init["account_index"], 724248)
         self.assertEqual(SignerClientStub.last_init["api_private_keys"], {4: "free-secret"})
+
+    def test_cleanup_builder_uses_maker_key_for_post_only_role(self):
+        old_env = {key: os.environ.get(key) for key in (
+            "LIGHTER_ACCOUNT_INDEX",
+            "LIGHTER_API_KEY_INDEX",
+            "LIGHTER_PRIVATE_KEY",
+            "LIGHTER_MAKER_API_KEY_INDEX",
+            "LIGHTER_MAKER_PRIVATE_KEY",
+        )}
+        os.environ.update({
+            "LIGHTER_ACCOUNT_INDEX": "723853",
+            "LIGHTER_API_KEY_INDEX": "4",
+            "LIGHTER_PRIVATE_KEY": "default-secret",
+            "LIGHTER_MAKER_API_KEY_INDEX": "5",
+            "LIGHTER_MAKER_PRIVATE_KEY": "maker-secret",
+        })
+        try:
+            built = asyncio.run(cancel_payload.build({
+                "params": {
+                    "phase": "after_sample",
+                    "metadata": {},
+                    "builder_params": {"api_key_role": "maker"},
+                },
+            }, LighterStub))
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(built["cleanup"]["ok"], True)
+        self.assertEqual(SignerClientStub.last_init["account_index"], 723853)
+        self.assertEqual(SignerClientStub.last_init["api_private_keys"], {5: "maker-secret"})
+
+    def test_cleanup_builder_uses_taker_key_for_ioc_role(self):
+        old_env = {key: os.environ.get(key) for key in (
+            "LIGHTER_ACCOUNT_INDEX",
+            "LIGHTER_API_KEY_INDEX",
+            "LIGHTER_PRIVATE_KEY",
+            "LIGHTER_TAKER_API_KEY_INDEX",
+            "LIGHTER_TAKER_PRIVATE_KEY",
+        )}
+        os.environ.update({
+            "LIGHTER_ACCOUNT_INDEX": "723853",
+            "LIGHTER_API_KEY_INDEX": "4",
+            "LIGHTER_PRIVATE_KEY": "default-secret",
+            "LIGHTER_TAKER_API_KEY_INDEX": "6",
+            "LIGHTER_TAKER_PRIVATE_KEY": "taker-secret",
+        })
+        try:
+            built = asyncio.run(cancel_payload.build({
+                "params": {
+                    "phase": "after_sample",
+                    "metadata": {},
+                    "builder_params": {
+                        "api_key_role": "taker",
+                        "order_type": 1,
+                        "time_in_force": 0,
+                    },
+                },
+            }, LighterStub))
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(built["cleanup"]["ok"], True)
+        self.assertEqual(SignerClientStub.last_init["account_index"], 723853)
+        self.assertEqual(SignerClientStub.last_init["api_private_keys"], {6: "taker-secret"})
 
 
 if __name__ == "__main__":

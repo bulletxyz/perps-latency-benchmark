@@ -50,7 +50,10 @@
         "api_key_role": "taker",
         "order_type": 1,
         "time_in_force": 0,
-        "neutralize_price": 750000
+        "neutralize_buy_price": 1500000,
+        "neutralize_sell_price": 500000,
+        "guard_preexisting_position": true,
+        "neutralize_preexisting_position": true
       }
     }
   }

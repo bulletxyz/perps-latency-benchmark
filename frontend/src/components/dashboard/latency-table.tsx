@@ -4,18 +4,24 @@ import { formatCount, formatLatency, formatPercent, formatUSD } from "@/lib/form
 import {
   cancelP50,
   cancelP95,
+  cancelP99,
   confirmP50,
   confirmP95,
+  confirmP99,
   primaryLabel,
   summarySpeedBumpMS,
 } from "@/lib/latency-metric"
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
-import { useMemo, useState } from "react"
+import { type ReactNode, useMemo, useState } from "react"
 
 export function LatencyTable({
+  headerActions,
+  isLoading = false,
   rows,
   subtractNetworkFloor,
 }: {
+  headerActions?: ReactNode
+  isLoading?: boolean
   rows: Array<SummaryRow>
   subtractNetworkFloor: boolean
 }) {
@@ -23,18 +29,27 @@ export function LatencyTable({
     direction: "asc",
     key: "p95",
   })
+  const displayRows = useMemo(
+    () => rows.filter(hasSuccessfulLatencyData),
+    [rows]
+  )
   const sortedRows = useMemo(
-    () => sortRows(rows, sort, subtractNetworkFloor),
-    [rows, sort, subtractNetworkFloor]
+    () => sortRows(displayRows, sort, subtractNetworkFloor),
+    [displayRows, sort, subtractNetworkFloor]
   )
 
   return (
     <section className="overflow-hidden rounded-sm border border-border/80 bg-surface-1">
-      <div className="border-b border-border/80 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 px-3 py-2">
         <h2 className="font-sans text-sm font-semibold">Venue Performance</h2>
+        {headerActions ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {headerActions}
+          </div>
+        ) : null}
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] border-collapse text-left text-[11px]">
+        <table className="w-full min-w-[1040px] border-collapse text-left text-[11px]">
           <thead className="bg-surface-2 text-muted-foreground">
             <tr>
               <HeaderCell>Venue</HeaderCell>
@@ -60,17 +75,28 @@ export function LatencyTable({
               >
                 p95
               </SortableHeaderCell>
+              <SortableHeaderCell
+                active={sort.key === "p99"}
+                align="right"
+                direction={sort.direction}
+                onClick={() => setSort((current) => nextSort(current, "p99"))}
+              >
+                p99
+              </SortableHeaderCell>
               <HeaderCell align="right">Cancel p50</HeaderCell>
               <HeaderCell align="right">Cancel p95</HeaderCell>
+              <HeaderCell align="right">Cancel p99</HeaderCell>
               <HeaderCell align="right">Cost/run</HeaderCell>
               <HeaderCell align="right">Speed bump</HeaderCell>
               <HeaderCell align="right">Errors</HeaderCell>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {isLoading ? (
+              <TableLoadingRows />
+            ) : displayRows.length === 0 ? (
               <tr>
-                <td colSpan={14} className="px-3 py-8 text-muted-foreground">
+                <td colSpan={16} className="px-3 py-8 text-muted-foreground">
                   No latency data is available for the selected filters.
                 </td>
               </tr>
@@ -91,8 +117,10 @@ export function LatencyTable({
                   <BodyCell align="right">{formatCount(row.ok)}</BodyCell>
                   <BodyCell align="right">{formatLatency(confirmP50(row, subtractNetworkFloor))}</BodyCell>
                   <BodyCell align="right">{formatLatency(confirmP95(row, subtractNetworkFloor))}</BodyCell>
+                  <BodyCell align="right">{formatLatency(confirmP99(row, subtractNetworkFloor))}</BodyCell>
                   <BodyCell align="right">{formatLatency(cancelP50(row, subtractNetworkFloor))}</BodyCell>
                   <BodyCell align="right">{formatLatency(cancelP95(row, subtractNetworkFloor))}</BodyCell>
+                  <BodyCell align="right">{formatLatency(cancelP99(row, subtractNetworkFloor))}</BodyCell>
                   <BodyCell align="right">{formatUSD(row.cost_mean_usd)}</BodyCell>
                   <BodyCell align="right">{formatLatency(summarySpeedBumpMS(row))}</BodyCell>
                   <BodyCell align="right">
@@ -108,7 +136,30 @@ export function LatencyTable({
   )
 }
 
-type SortKey = "p50" | "p95"
+function hasSuccessfulLatencyData(row: SummaryRow) {
+  return row.ok > 0
+}
+
+function TableLoadingRows() {
+  return (
+    <>
+      {Array.from({ length: 5 }).map((_, index) => (
+        <tr key={index} className="border-t border-border/70">
+          {Array.from({ length: 16 }).map((__, cellIndex) => (
+            <td key={cellIndex} className="px-3 py-3">
+              <div
+                className="h-3 animate-pulse rounded-sm bg-muted"
+                style={{ width: `${cellIndex < 2 ? 72 : 44}%` }}
+              />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  )
+}
+
+type SortKey = "p50" | "p95" | "p99"
 type SortDirection = "asc" | "desc"
 
 interface SortState {
@@ -153,9 +204,14 @@ function sortValue(
   key: SortKey,
   subtractNetworkFloor: boolean
 ) {
-  return key === "p50"
-    ? confirmP50(row, subtractNetworkFloor)
-    : confirmP95(row, subtractNetworkFloor)
+  switch (key) {
+    case "p50":
+      return confirmP50(row, subtractNetworkFloor)
+    case "p95":
+      return confirmP95(row, subtractNetworkFloor)
+    case "p99":
+      return confirmP99(row, subtractNetworkFloor)
+  }
 }
 
 function compareLatencyValues(

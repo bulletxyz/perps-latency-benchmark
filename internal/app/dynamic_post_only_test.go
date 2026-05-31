@@ -9,6 +9,7 @@ import (
 
 	"perps-latency-benchmark/internal/payload"
 	"perps-latency-benchmark/internal/venues/hyperliquid"
+	"perps-latency-benchmark/internal/venues/nado"
 	"perps-latency-benchmark/internal/venues/spec"
 )
 
@@ -81,5 +82,47 @@ func TestDynamicPostOnlyHTTPPriceHookCachesHyperliquidL2Book(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("requests after next chunk hook = %d", requests)
+	}
+}
+
+func TestDynamicPostOnlyHTTPPriceHookUsesNadoMarketPrice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["type"] != "market_price" || body["product_id"] != float64(2) {
+			t.Fatalf("request body = %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"product_id":2,"bid_x18":"100000000000000000000","ask_x18":"101000000000000000000"}}`))
+	}))
+	defer server.Close()
+
+	params := map[string]any{
+		"product_id":                 2,
+		"post_only_price_source":     "nado_market_price_http",
+		"post_only_price_offset_bps": 500,
+		"post_only_price_refresh_ms": 10000,
+	}
+	runtime := spec.RuntimeConfig{
+		BaseURL: server.URL,
+		Params:  params,
+	}
+	hook := dynamicPostOnlyHTTPPriceHook("nado", params, nado.Definition(), runtime)
+	req := payload.Request{Params: map[string]any{"side": "buy"}}
+
+	effective, metadata, err := hook(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective["price"] != "95" {
+		t.Fatalf("price = %v", effective["price"])
+	}
+	if metadata["post_only_price_source"] != "nado_market_price_http" {
+		t.Fatalf("metadata source = %v", metadata["post_only_price_source"])
 	}
 }

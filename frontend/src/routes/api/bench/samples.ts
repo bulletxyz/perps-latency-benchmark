@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { proxyBenchJSON } from "@/api/bench.server"
-import { DEFAULT_WINDOW, isWindowOption } from "@/api/bench"
+import { proxyBenchJSONWithFallback } from "@/api/bench.server"
+import { resolveBenchWindow } from "@/api/bench-window.server"
 
 const MAX_LIMIT = 10000
 
@@ -10,15 +10,20 @@ export const Route = createFileRoute("/api/bench/samples")({
     handlers: {
       GET: async ({ request }) => {
         const url = new URL(request.url)
-        const window = url.searchParams.get("window")
         const limit = Number(url.searchParams.get("limit"))
-        const safeWindow = window && isWindowOption(window) ? window : DEFAULT_WINDOW
+        const resolved = await resolveBenchWindow(url.searchParams.get("window"))
+        if ("response" in resolved) {
+          return resolved.response
+        }
         const safeLimit =
           Number.isInteger(limit) && limit > 0
             ? Math.min(limit, MAX_LIMIT)
             : 2000
 
-        return proxyBenchJSON(`/api/samples?window=${safeWindow}&limit=${safeLimit}`)
+        return proxyBenchJSONWithFallback(
+          `/api/dashboard/samples?window=${resolved.apiWindow}&limit=${safeLimit}`,
+          `/api/samples?window=${resolved.apiWindow}&limit=${safeLimit}`
+        )
       },
     },
   },

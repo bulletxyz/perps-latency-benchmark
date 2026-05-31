@@ -1,10 +1,15 @@
 package cleanup
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"perps-latency-benchmark/internal/bench"
+	"perps-latency-benchmark/internal/netlatency"
 	"perps-latency-benchmark/internal/payload"
 )
 
@@ -98,4 +103,57 @@ func TestCleanupRoutesAllowExplicitHTTPWithoutBody(t *testing.T) {
 	if routes[0].http.Method != "DELETE" || routes[0].http.URL == "" {
 		t.Fatalf("http route = %#v", routes[0].http)
 	}
+}
+
+func TestAfterRunRetriesNonceCleanup(t *testing.T) {
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt := atomic.AddInt32(&requests, 1)
+		if attempt == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid nonce"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	body := "{}"
+	builder := &staticCleanupBuilder{built: payload.Built{
+		Method: http.MethodPost,
+		URL:    server.URL,
+		Body:   &body,
+	}}
+	adapter := &CommandAdapter{
+		cfg: CommandConfig{
+			Client:  netlatency.NewClient(netlatency.ClientConfig{Timeout: time.Second}),
+			Timeout: time.Second,
+		},
+		builder: builder,
+		headers: make(http.Header),
+	}
+
+	cleanup := adapter.AfterRun(context.Background(), bench.Result{Venue: "lighter"})
+	if !cleanup.OK {
+		t.Fatalf("AfterRun cleanup OK = false, error = %q", cleanup.Error)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if builder.calls != 2 {
+		t.Fatalf("builder calls = %d, want 2", builder.calls)
+	}
+	if got := cleanup.Metadata["cleanup_retry_count"]; got != 1 {
+		t.Fatalf("cleanup_retry_count = %#v, want 1", got)
+	}
+}
+
+type staticCleanupBuilder struct {
+	built payload.Built
+	calls int
+}
+
+func (b *staticCleanupBuilder) Build(context.Context, payload.Request) (payload.Built, error) {
+	b.calls++
+	return b.built, nil
 }

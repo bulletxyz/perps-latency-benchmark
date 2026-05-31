@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from cleanup_common import cleanup_orders_for_venue, cleanup_result, result_orders_for_venue
+from cleanup_common import cleanup_orders_for_venue, cleanup_result, flat_position_guard, guard_preexisting_position, mark_self_heal_position, result_orders_for_venue, self_heal_preexisting_position
 from build_payload import cleanup_ref, order_cloid, valid_price
 
 
@@ -43,7 +43,7 @@ def build(req: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, or
     builder_params = dict(params.get("builder_params") or {})
     phase = params.get("phase", "after_sample")
     if phase == "before_run":
-        return before_run(params, builder_params, Account, Info, MAINNET_API_URL, sign_l1_action, Cloid)
+        return before_run(params, builder_params, Account, Info, MAINNET_API_URL, order_request_to_order_wire, order_wires_to_order_action, sign_l1_action, Cloid)
     if phase == "after_run":
         return after_run(params, builder_params, Account, Info, MAINNET_API_URL)
 
@@ -59,13 +59,34 @@ def build(req: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, or
     return skipped("no hyperliquid cleanup action needed")
 
 
-def before_run(params: dict[str, Any], builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, sign_l1_action: Any, Cloid: Any) -> dict[str, Any]:
+def before_run(params: dict[str, Any], builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, order_request_to_order_wire: Any, order_wires_to_order_action: Any, sign_l1_action: Any, Cloid: Any) -> dict[str, Any]:
     position = position_snapshot(builder_params, Account, Info, MAINNET_API_URL)
     planned = planned_orders(params, builder_params, Cloid)
     open_orders = open_cleanup_orders(planned, builder_params, Account, Info, MAINNET_API_URL)
     if not open_orders:
+        repair = neutralize_preexisting_position_payload(
+            params,
+            builder_params,
+            position,
+            Account,
+            Info,
+            MAINNET_API_URL,
+            order_request_to_order_wire,
+            order_wires_to_order_action,
+            sign_l1_action,
+            Cloid,
+        )
+        if repair:
+            return repair
+        guard = flat_position_guard("hyperliquid", position, builder_params)
+        if guard:
+            return guard
         return cleanup_result(False, True, "no stale hyperliquid benchmark orders", metadata={"position": position})
-    return cancel_payload(open_orders, builder_params, Account, MAINNET_API_URL, sign_l1_action, metadata={"position": position})
+    metadata = {"position": position}
+    if position and guard_preexisting_position(builder_params):
+        metadata["restart_before_measurement"] = True
+        metadata["preexisting_position"] = position
+    return cancel_payload(open_orders, builder_params, Account, MAINNET_API_URL, sign_l1_action, metadata=metadata)
 
 
 def after_run(params: dict[str, Any], builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str) -> dict[str, Any]:
@@ -118,11 +139,15 @@ def cancel_payload(orders: list[dict[str, Any]], builder_params: dict[str, Any],
         "user": wallet.address,
         "cloids": [str(order["cloid"]) for order in orders],
     }
+    payload_metadata = {"cleanup": "cancelByCloid", "orders": len(orders), "nonce": nonce, "cancel_confirmation": cancel_confirmation, "reconciliation": reconciliation}
+    if reconciliation.get("restart_before_measurement"):
+        payload_metadata["restart_before_measurement"] = True
+        payload_metadata["preexisting_position"] = reconciliation.get("preexisting_position")
     return {
         "headers": {"Content-Type": "application/json"},
         "body": compact_json(payload),
         "ws_body": compact_json(ws_payload),
-        "metadata": {"cleanup": "cancelByCloid", "orders": len(orders), "nonce": nonce, "cancel_confirmation": cancel_confirmation, "reconciliation": reconciliation},
+        "metadata": payload_metadata,
     }
 
 
@@ -185,6 +210,19 @@ def neutralize_payload(params: dict[str, Any], builder_params: dict[str, Any], A
             "reconciliation": {"position_before": before_position, "position_after": after_position, "delta": str(delta)},
         },
     }
+
+
+def neutralize_preexisting_position_payload(params: dict[str, Any], builder_params: dict[str, Any], position: list[dict[str, Any]], Account: Any, Info: Any, MAINNET_API_URL: str, order_request_to_order_wire: Any, order_wires_to_order_action: Any, sign_l1_action: Any, Cloid: Any) -> dict[str, Any] | None:
+    if not position or not self_heal_preexisting_position(builder_params):
+        return None
+    repair_params = dict(params)
+    repair_params["run_metadata"] = {"position": []}
+    repair_builder_params = dict(builder_params)
+    repair_builder_params["neutralize_on_fill"] = True
+    payload = neutralize_payload(repair_params, repair_builder_params, Account, Info, MAINNET_API_URL, order_request_to_order_wire, order_wires_to_order_action, sign_l1_action, Cloid)
+    if not payload:
+        return None
+    return mark_self_heal_position(payload, "hyperliquid", position)
 
 
 def planned_orders(params: dict[str, Any], builder_params: dict[str, Any], Cloid: Any) -> list[dict[str, Any]]:
@@ -279,6 +317,9 @@ def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def neutralize_price(builder_params: dict[str, Any], is_buy: bool) -> Decimal:
+    side_price_key = "neutralize_buy_price" if is_buy else "neutralize_sell_price"
+    if builder_params.get(side_price_key) is not None:
+        return Decimal(str(builder_params[side_price_key]))
     if builder_params.get("neutralize_price") is not None:
         return Decimal(str(builder_params["neutralize_price"]))
     price = Decimal(str(builder_params["price"]))

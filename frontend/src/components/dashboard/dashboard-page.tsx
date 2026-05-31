@@ -1,15 +1,30 @@
 "use client"
 
-import { useQuery } from "@tanstack/react-query"
-import { RefreshCw } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { LogOut, RefreshCw } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
+  DEFAULT_SUMMARY_WINDOW,
+  PUBLIC_WINDOW_OPTIONS,
+  PUBLIC_SUMMARY_WINDOW_OPTIONS,
+  SUMMARY_WINDOW_OPTIONS,
+  WINDOW_OPTIONS,
+  advancedAuthSessionQueryOptions,
   DEFAULT_WINDOW,
+  exchangeTPSQueryOptions,
   healthQueryOptions,
+  isLongChartWindow,
+  isPublicSummaryWindowOption,
+  isPublicWindowOption,
+  latencySeriesQueryOptions,
   latestQueryOptions,
-  samplesQueryOptions,
+  loginAdvanced,
+  logoutAdvanced,
+  takerCostSeriesQueryOptions,
+  type SamplesResponse,
   type Sample,
+  type SummaryWindowOption,
   type SummaryRow,
 } from "@/api/bench"
 import {
@@ -20,6 +35,7 @@ import {
   DashboardFilterBar,
   type DashboardFilters,
 } from "@/components/dashboard/filters"
+import { ExchangeTPSPanel } from "@/components/dashboard/exchange-tps-panel"
 import { InfrastructurePanel } from "@/components/dashboard/infrastructure-panel"
 import { LatencyTable } from "@/components/dashboard/latency-table"
 import { MethodologyPanel } from "@/components/dashboard/methodology-panel"
@@ -27,6 +43,14 @@ import { MetricCard } from "@/components/dashboard/metric-card"
 import { StatusPill } from "@/components/dashboard/status-pill"
 import { TakerCostPanel } from "@/components/dashboard/taker-cost-panel"
 import { VenueName } from "@/components/dashboard/venue-logo"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import {
   formatCount,
   formatLatency,
@@ -43,6 +67,19 @@ const HIDDEN_FRONTEND_VENUES = new Set(["edgex"])
 const GITHUB_URL = "https://github.com/Check-the-Chain/perps-latency-benchmark"
 type CancelChartScenario = "single" | "batch"
 
+const NAV_ITEMS = [
+  { href: "#summary", label: "Summary" },
+  { href: "#results", label: "Results" },
+  { href: "#post-only", label: "Post-only" },
+  { href: "#batch-post-only", label: "Batch" },
+  { href: "#cancel", label: "Cancel" },
+  { href: "#transactions-per-second", label: "TPS" },
+  { href: "#taker", label: "Taker" },
+  { href: "#costs", label: "Costs" },
+  { href: "#infrastructure", label: "Infra" },
+  { href: "#methodology", label: "Methodology" },
+] as const
+
 export function DashboardPage() {
   const [filters, setFilters] = useState<DashboardFilters>({
     subtractNetworkFloor: false,
@@ -52,11 +89,25 @@ export function DashboardPage() {
   const [chartScale, setChartScale] = useState<LatencyScaleMode>("log")
   const [cancelChartScenario, setCancelChartScenario] =
     useState<CancelChartScenario>("single")
+  const [summaryWindow, setSummaryWindow] =
+    useState<SummaryWindowOption>(DEFAULT_SUMMARY_WINDOW)
 
+  const queryClient = useQueryClient()
   const health = useQuery(healthQueryOptions())
-  const latest = useQuery(latestQueryOptions(filters.window))
-  const samples = useQuery(samplesQueryOptions(filters.window))
-  const measurements = samples.data?.samples ?? []
+  const advancedAuth = useQuery(advancedAuthSessionQueryOptions())
+  const isAdvancedAuthenticated = advancedAuth.data?.authenticated === true
+  const longChartWindow = isLongChartWindow(filters.window)
+  const latest = useQuery(latestQueryOptions(summaryWindow))
+  const latencySeries = useQuery(latencySeriesQueryOptions(filters.window))
+  const takerCostSeries = useQuery(takerCostSeriesQueryOptions(filters.window))
+  const exchangeTPS = useQuery(exchangeTPSQueryOptions(filters.window))
+  const isLatestLoading = latest.isLoading && !latest.data
+  const isLatencySeriesLoading = latencySeries.isLoading && !latencySeries.data
+  const isTakerCostSeriesLoading =
+    takerCostSeries.isLoading && !takerCostSeries.data
+  const isExchangeTPSLoading = exchangeTPS.isLoading && !exchangeTPS.data
+  const measurements = latencySeries.data?.samples ?? []
+  const costMeasurements = takerCostSeries.data?.samples ?? []
   const visibleMeasurements = useMemo(
     () => measurements.filter((sample) => isVisibleVenue(sample.venue)),
     [measurements]
@@ -86,6 +137,10 @@ export function DashboardPage() {
     () => visibleMeasurements.filter((sample) => isTakerOrder(sample.order_type)),
     [visibleMeasurements]
   )
+  const visibleCostMeasurements = useMemo(
+    () => costMeasurements.filter((sample) => isVisibleVenue(sample.venue)),
+    [costMeasurements]
+  )
   const filteredSummaries = useMemo(
     () => filterSummaries(visibleSummaries, filters),
     [filters, visibleSummaries]
@@ -101,6 +156,26 @@ export function DashboardPage() {
   const takerSamples = useMemo(
     () => filterSamples(takerSourceSamples, filters),
     [filters, takerSourceSamples]
+  )
+  const takerCostSamples = useMemo(
+    () => filterSamples(visibleCostMeasurements, filters),
+    [filters, visibleCostMeasurements]
+  )
+  const exchangeTPSRows = useMemo(
+    () =>
+      (exchangeTPS.data?.series ?? []).filter(
+        (row) => isVisibleVenue(row.venue) && matchesVenue(filters.venues, row.venue)
+      ),
+    [exchangeTPS.data?.series, filters.venues]
+  )
+  const exchangeTPSVenues = useMemo(
+    () =>
+      uniqueSorted(
+        (exchangeTPS.data?.sources ?? [])
+          .map((source) => source.venue)
+          .filter(isVisibleVenue)
+      ),
+    [exchangeTPS.data?.sources]
   )
   const cancelSamples =
     cancelChartScenario === "batch" ? batchPostOnlySamples : postOnlySamples
@@ -132,10 +207,103 @@ export function DashboardPage() {
     () => getStats(filteredSummaries, filters.subtractNetworkFloor),
     [filteredSummaries, filters.subtractNetworkFloor]
   )
+  const handleAdvancedSessionChange = () => {
+    void queryClient.invalidateQueries({
+      queryKey: ["bench-advanced-auth-session"],
+    })
+  }
+  const windowOptions = isAdvancedAuthenticated
+    ? WINDOW_OPTIONS
+    : PUBLIC_WINDOW_OPTIONS
+  const summaryWindowOptions = isAdvancedAuthenticated
+    ? SUMMARY_WINDOW_OPTIONS
+    : PUBLIC_SUMMARY_WINDOW_OPTIONS
+  const exportWindowOptions = useMemo(
+    () => windowOptions.map((window) => ({ label: window, value: window })),
+    [windowOptions]
+  )
+  const loadLatencyExportSamples = useCallback(
+    async (window: string) => {
+      const data = await fetchDashboardJSON<SamplesResponse>(
+        `/api/bench/latency-series?window=${window}&limit=100000`
+      )
+      return data.samples.filter((sample) => isVisibleVenue(sample.venue))
+    },
+    []
+  )
+  const loadPostOnlyExportSamples = useCallback(
+    async (window: string) =>
+      filterSamples(
+        (await loadLatencyExportSamples(window)).filter(
+          (sample) =>
+            sample.scenario !== "batch" && isPostOnlyOrder(sample.order_type)
+        ),
+        filters
+      ),
+    [filters, loadLatencyExportSamples]
+  )
+  const loadBatchPostOnlyExportSamples = useCallback(
+    async (window: string) =>
+      filterSamples(
+        (await loadLatencyExportSamples(window)).filter(
+          (sample) =>
+            sample.scenario === "batch" && isPostOnlyOrder(sample.order_type)
+        ),
+        filters
+      ),
+    [filters, loadLatencyExportSamples]
+  )
+  const loadTakerExportSamples = useCallback(
+    async (window: string) =>
+      filterSamples(
+        (await loadLatencyExportSamples(window)).filter((sample) =>
+          isTakerOrder(sample.order_type)
+        ),
+        filters
+      ),
+    [filters, loadLatencyExportSamples]
+  )
+  const loadCancelExportSamples = useCallback(
+    (window: string) =>
+      cancelChartScenario === "batch"
+        ? loadBatchPostOnlyExportSamples(window)
+        : loadPostOnlyExportSamples(window),
+    [cancelChartScenario, loadBatchPostOnlyExportSamples, loadPostOnlyExportSamples]
+  )
+  const loadTakerCostExportSamples = useCallback(
+    async (window: string) => {
+      const data = await fetchDashboardJSON<SamplesResponse>(
+        `/api/bench/taker-cost-series?window=${window}&limit=100000`
+      )
+      return filterSamples(
+        data.samples.filter((sample) => isVisibleVenue(sample.venue)),
+        filters
+      )
+    },
+    [filters]
+  )
+
+  useEffect(() => {
+    if (!isAdvancedAuthenticated && !isPublicWindowOption(filters.window)) {
+      setFilters((current) => ({ ...current, window: DEFAULT_WINDOW }))
+    }
+  }, [filters.window, isAdvancedAuthenticated])
+
+  useEffect(() => {
+    if (
+      !isAdvancedAuthenticated &&
+      !isPublicSummaryWindowOption(summaryWindow)
+    ) {
+      setSummaryWindow(DEFAULT_SUMMARY_WINDOW)
+    }
+  }, [isAdvancedAuthenticated, summaryWindow])
 
   return (
     <div className="space-y-3">
-      <section className="rounded-sm border border-border/80 bg-surface-1 p-3">
+      <section
+        id="summary"
+        className="scroll-mt-16 rounded-sm border border-border/80 bg-surface-1 p-3"
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="font-sans text-lg font-semibold">
@@ -157,9 +325,10 @@ export function DashboardPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <DashboardFilterBar
-              filters={filters}
-              onChange={setFilters}
+            <AdvancedAuthControls
+              authEnabled={advancedAuth.data?.enabled !== false}
+              authenticated={isAdvancedAuthenticated}
+              onSessionChange={handleAdvancedSessionChange}
             />
             <a
               href={GITHUB_URL}
@@ -184,7 +353,9 @@ export function DashboardPage() {
               type="button"
               onClick={() => {
                 void latest.refetch()
-                void samples.refetch()
+                void latencySeries.refetch()
+                void takerCostSeries.refetch()
+                void exchangeTPS.refetch()
                 void health.refetch()
               }}
               className="inline-flex h-8 items-center gap-2 rounded-sm border border-border bg-surface-1 px-2 text-[11px] text-foreground"
@@ -196,7 +367,9 @@ export function DashboardPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 md:grid-cols-2">
+      <DashboardNav />
+
+      <section className="grid scroll-mt-16 gap-3 md:grid-cols-2">
         <MetricCard
           label="Best post-only p95"
           value={formatLatency(stats.fastestPostOnlyP95 ? confirmP95(stats.fastestPostOnlyP95, filters.subtractNetworkFloor) : undefined)}
@@ -211,79 +384,349 @@ export function DashboardPage() {
         />
       </section>
 
-      <LatencyTable
-        rows={filteredSummaries}
-        subtractNetworkFloor={filters.subtractNetworkFloor}
-      />
-      <InfrastructurePanel />
-      <LatencyTimeseriesChart
-        title="Post-only Confirmation"
-        description="How quickly a resting order is confirmed as placed."
-        samples={postOnlySamples}
-        scaleMode={chartScale}
-        selectedVenues={selectedVenueList(filters.venues, postOnlyVenues)}
-        venues={postOnlyVenues}
-        valueForSample={confirmationValueForSample}
-        onScaleModeChange={setChartScale}
-        onVenueSelectionChange={(venues) =>
-          setFilters((current) => ({ ...current, venues }))
-        }
-      />
-      <LatencyTimeseriesChart
-        title="Batch Post-only Confirmation"
-        description="Five post-only orders per sample. Native batch venues are labeled separately from manual fanout venues that send concurrent single-order requests."
-        samples={batchPostOnlySamples}
-        scaleMode={chartScale}
-        selectedVenues={selectedVenueList(filters.venues, batchPostOnlyVenues)}
-        venues={batchPostOnlyVenues}
-        valueForSample={confirmationValueForSample}
-        onScaleModeChange={setChartScale}
-        onVenueSelectionChange={(venues) =>
-          setFilters((current) => ({ ...current, venues }))
-        }
-      />
-      <LatencyTimeseriesChart
-        title="Cancel Confirmation"
-        description={
-          cancelChartScenario === "batch"
-            ? "Five post-only cleanup cancels per sample, measured when every cancel is confirmed through the account feed."
-            : "Post-only cleanup cancel latency, measured when the cancel is confirmed through the account feed."
-        }
-        emptyMessage="No account-feed cancel confirmation data is available for the selected filters."
-        headerActions={
-          <CancelScenarioToggle
-            value={cancelChartScenario}
-            onChange={setCancelChartScenario}
-          />
-        }
-        samples={cancelSamples}
-        scaleMode={chartScale}
-        selectedVenues={selectedVenueList(filters.venues, cancelVenues)}
-        venues={cancelVenues}
-        valueForSample={cancelValueForSample}
-        valueLabel="Cancel confirmation"
-        onScaleModeChange={setChartScale}
-        onVenueSelectionChange={(venues) =>
-          setFilters((current) => ({ ...current, venues }))
-        }
-      />
-      <LatencyTimeseriesChart
-        title="Taker Confirmation"
-        description="How quickly a marketable order is confirmed, adjusted for published venue delays."
-        samples={takerSamples}
-        scaleMode={chartScale}
-        selectedVenues={selectedVenueList(filters.venues, takerVenues)}
-        venues={takerVenues}
-        valueForSample={confirmationValueForSample}
-        onScaleModeChange={setChartScale}
-        onVenueSelectionChange={(venues) =>
-          setFilters((current) => ({ ...current, venues }))
-        }
-      />
-      <TakerCostPanel samples={takerSamples} />
-      <MethodologyPanel />
+      <section id="results" className="scroll-mt-16">
+        <LatencyTable
+          headerActions={
+            <SummaryWindowSelect
+              onChange={setSummaryWindow}
+              options={summaryWindowOptions}
+              value={summaryWindow}
+            />
+          }
+          isLoading={isLatestLoading}
+          rows={filteredSummaries}
+          subtractNetworkFloor={filters.subtractNetworkFloor}
+        />
+      </section>
+      <section className="scroll-mt-16 rounded-sm border border-border/80 bg-surface-1 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            Chart controls
+          </span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <DashboardFilterBar
+              filters={filters}
+              label="Chart window"
+              onChange={setFilters}
+              windowOptions={windowOptions}
+            />
+          </div>
+        </div>
+      </section>
+      <section id="post-only" className="scroll-mt-16">
+        <LatencyTimeseriesChart
+          title="Post-only Confirmation"
+          description="How quickly a resting order is confirmed as placed."
+          defaultExportWindow={filters.window}
+          exportWindowOptions={exportWindowOptions}
+          forceTrendOnly={longChartWindow}
+          isLoading={isLatencySeriesLoading}
+          loadExportSamples={loadPostOnlyExportSamples}
+          samples={postOnlySamples}
+          scaleMode={chartScale}
+          selectedVenues={selectedVenueList(filters.venues, postOnlyVenues)}
+          showExports={isAdvancedAuthenticated}
+          venues={postOnlyVenues}
+          valueForSample={confirmationValueForSample}
+          onScaleModeChange={setChartScale}
+          onVenueSelectionChange={(venues) =>
+            setFilters((current) => ({ ...current, venues }))
+          }
+        />
+      </section>
+      <section id="batch-post-only" className="scroll-mt-16">
+        <LatencyTimeseriesChart
+          title="Batch Post-only Confirmation"
+          description="Five post-only orders per sample. Native batch venues are labeled separately from manual fanout venues that send concurrent single-order requests."
+          defaultExportWindow={filters.window}
+          exportWindowOptions={exportWindowOptions}
+          forceTrendOnly={longChartWindow}
+          isLoading={isLatencySeriesLoading}
+          loadExportSamples={loadBatchPostOnlyExportSamples}
+          samples={batchPostOnlySamples}
+          scaleMode={chartScale}
+          selectedVenues={selectedVenueList(filters.venues, batchPostOnlyVenues)}
+          showExports={isAdvancedAuthenticated}
+          venues={batchPostOnlyVenues}
+          valueForSample={confirmationValueForSample}
+          onScaleModeChange={setChartScale}
+          onVenueSelectionChange={(venues) =>
+            setFilters((current) => ({ ...current, venues }))
+          }
+        />
+      </section>
+      <section id="cancel" className="scroll-mt-16">
+        <LatencyTimeseriesChart
+          title="Cancel Confirmation"
+          description={
+            cancelChartScenario === "batch"
+              ? "Five post-only cleanup cancels per sample, measured when every cancel is confirmed through the account feed."
+              : "Post-only cleanup cancel latency, measured when the cancel is confirmed through the account feed."
+          }
+          defaultExportWindow={filters.window}
+          emptyMessage="No account-feed cancel confirmation data is available for the selected filters."
+          exportWindowOptions={exportWindowOptions}
+          forceTrendOnly={longChartWindow}
+          headerActions={
+            <CancelScenarioToggle
+              value={cancelChartScenario}
+              onChange={setCancelChartScenario}
+            />
+          }
+          isLoading={isLatencySeriesLoading}
+          loadExportSamples={loadCancelExportSamples}
+          samples={cancelSamples}
+          scaleMode={chartScale}
+          selectedVenues={selectedVenueList(filters.venues, cancelVenues)}
+          showExports={isAdvancedAuthenticated}
+          venues={cancelVenues}
+          valueForSample={cancelValueForSample}
+          valueLabel="Cancel confirmation"
+          onScaleModeChange={setChartScale}
+          onVenueSelectionChange={(venues) =>
+            setFilters((current) => ({ ...current, venues }))
+          }
+        />
+      </section>
+      <section id="transactions-per-second" className="scroll-mt-16">
+        <ExchangeTPSPanel
+          defaultExportWindow={filters.window}
+          exportHrefForWindow={(window) => {
+            const params = new URLSearchParams({ window })
+            params.set(
+              "venues",
+              selectedVenueList(filters.venues, exchangeTPSVenues).join(",")
+            )
+            return `/api/bench/exchange-tps-export?${params.toString()}`
+          }}
+          exportWindowOptions={exportWindowOptions}
+          isLoading={isExchangeTPSLoading}
+          scaleMode={chartScale}
+          selectedVenues={selectedVenueList(filters.venues, exchangeTPSVenues)}
+          rows={exchangeTPSRows}
+          venues={exchangeTPSVenues}
+          showExports={isAdvancedAuthenticated}
+          onScaleModeChange={setChartScale}
+          onVenueSelectionChange={(venues) =>
+            setFilters((current) => ({ ...current, venues }))
+          }
+        />
+      </section>
+      <section id="taker" className="scroll-mt-16">
+        <LatencyTimeseriesChart
+          title="Taker Confirmation"
+          description="How quickly a marketable order is confirmed, adjusted for published venue delays."
+          defaultExportWindow={filters.window}
+          exportWindowOptions={exportWindowOptions}
+          forceTrendOnly={longChartWindow}
+          isLoading={isLatencySeriesLoading}
+          loadExportSamples={loadTakerExportSamples}
+          samples={takerSamples}
+          scaleMode={chartScale}
+          selectedVenues={selectedVenueList(filters.venues, takerVenues)}
+          showExports={isAdvancedAuthenticated}
+          venues={takerVenues}
+          valueForSample={confirmationValueForSample}
+          onScaleModeChange={setChartScale}
+          onVenueSelectionChange={(venues) =>
+            setFilters((current) => ({ ...current, venues }))
+          }
+        />
+      </section>
+      <section id="costs" className="scroll-mt-16">
+        <TakerCostPanel
+          defaultExportWindow={filters.window}
+          exportWindowOptions={exportWindowOptions}
+          isLoading={isTakerCostSeriesLoading}
+          loadExportSamples={loadTakerCostExportSamples}
+          samples={takerCostSamples}
+          showExports={isAdvancedAuthenticated}
+        />
+      </section>
+      <section id="infrastructure" className="scroll-mt-16">
+        <InfrastructurePanel />
+      </section>
+      <section id="methodology" className="scroll-mt-16">
+        <MethodologyPanel />
+      </section>
     </div>
   )
+}
+
+function AdvancedAuthControls({
+  authEnabled,
+  authenticated,
+  onSessionChange,
+}: {
+  authEnabled: boolean
+  authenticated: boolean
+  onSessionChange: () => void
+}) {
+  const [password, setPassword] = useState("")
+  const [open, setOpen] = useState(false)
+  const login = useMutation({
+    mutationFn: loginAdvanced,
+    onSuccess: () => {
+      setPassword("")
+      setOpen(false)
+      onSessionChange()
+    },
+  })
+  const logout = useMutation({
+    mutationFn: logoutAdvanced,
+    onSuccess: onSessionChange,
+  })
+
+  if (!authEnabled) {
+    return null
+  }
+
+  if (!authenticated) {
+    return (
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen)
+          if (!nextOpen) {
+            setPassword("")
+            login.reset()
+          }
+        }}
+      >
+        <DialogTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex h-8 items-center gap-1 rounded-sm border border-border bg-surface-1 px-2 text-[11px] text-foreground hover:bg-surface-2"
+          >
+            Login
+          </button>
+        </DialogTrigger>
+        <DialogContent>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const trimmed = password.trim()
+              if (trimmed) {
+                login.mutate(trimmed)
+              }
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Login</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="advanced-password"
+                className="text-[11px] font-medium text-foreground"
+              >
+                Password
+              </label>
+              <input
+                id="advanced-password"
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.currentTarget.value)
+                  if (login.isError) {
+                    login.reset()
+                  }
+                }}
+                className="h-9 rounded-sm border border-border bg-background px-2.5 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary"
+                aria-invalid={login.isError || undefined}
+                autoComplete="current-password"
+                autoFocus
+              />
+              {login.isError ? (
+                <p className="text-[11px] text-loss">Wrong password</p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <button
+                type="submit"
+                className="inline-flex h-8 items-center justify-center rounded-sm border border-primary bg-primary px-3 text-[11px] text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={login.isPending || !password.trim()}
+              >
+                {login.isPending ? "Logging in" : "Login"}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
+  return (
+    <div className="flex h-8 items-center gap-1">
+      <span className="text-[11px] font-medium text-foreground">Advanced</span>
+      <button
+        type="button"
+        onClick={() => logout.mutate()}
+        className="inline-flex h-8 items-center gap-1 rounded-sm border border-border bg-surface-1 px-2 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+      >
+        <LogOut className="size-3" aria-hidden />
+        Log out
+      </button>
+    </div>
+  )
+}
+
+function SummaryWindowSelect({
+  onChange,
+  options,
+  value,
+}: {
+  onChange: (window: SummaryWindowOption) => void
+  options: ReadonlyArray<SummaryWindowOption>
+  value: SummaryWindowOption
+}) {
+  return (
+    <label className="flex items-center gap-2 rounded-sm border border-border bg-surface-1 px-2 py-1.5 text-[11px] text-muted-foreground">
+      <span>Summary period</span>
+      <select
+        value={value}
+        onChange={(event) =>
+          onChange(event.currentTarget.value as SummaryWindowOption)
+        }
+        className="bg-transparent text-foreground outline-none"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option === "all" ? "All time" : option}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function DashboardNav() {
+  return (
+    <nav
+      aria-label="Dashboard sections"
+      className="sticky top-0 z-20 overflow-x-auto rounded-sm border border-border/80 bg-background/95 px-2 py-2 backdrop-blur"
+    >
+      <div className="flex min-w-max items-center gap-1">
+        {NAV_ITEMS.map((item) => (
+          <a
+            key={item.href}
+            href={item.href}
+            className="inline-flex h-7 items-center rounded-sm px-2.5 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+          >
+            {item.label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  )
+}
+
+async function fetchDashboardJSON<T>(path: string): Promise<T> {
+  const response = await fetch(path)
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`)
+  }
+  return response.json() as Promise<T>
 }
 
 function filterSummaries(rows: Array<SummaryRow>, filters: DashboardFilters) {
@@ -408,7 +851,7 @@ function CancelScenarioToggle({
           onClick={() => onChange(option.value)}
           className={`px-2.5 ${
             value === option.value
-              ? "bg-foreground text-background"
+              ? "bg-primary/15 text-foreground ring-1 ring-inset ring-primary/40"
               : "text-muted-foreground hover:bg-surface-2 hover:text-foreground"
           }`}
           aria-pressed={value === option.value}

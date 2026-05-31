@@ -1,4 +1,4 @@
-import { WINDOW_OPTIONS, type WindowOption } from "@/api/bench"
+import { PUBLIC_WINDOW_OPTIONS, type WindowOption } from "@/api/bench"
 
 export interface DashboardFilters {
   subtractNetworkFloor: boolean
@@ -8,17 +8,21 @@ export interface DashboardFilters {
 
 export function DashboardFilterBar({
   filters,
+  label = "Window",
   onChange,
+  windowOptions = PUBLIC_WINDOW_OPTIONS,
 }: {
   filters: DashboardFilters
+  label?: string
   onChange: (filters: DashboardFilters) => void
+  windowOptions?: ReadonlyArray<WindowOption>
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <FilterSelect
-        label="Window"
+        label={label}
         value={filters.window}
-        options={WINDOW_OPTIONS.map((value) => ({ label: value, value }))}
+        options={windowOptions.map((value) => ({ label: value, value }))}
         onChange={(window) =>
           onChange({ ...filters, window: window as WindowOption })
         }

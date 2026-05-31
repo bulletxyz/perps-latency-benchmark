@@ -215,6 +215,10 @@ func NewPacificaParser() Parser {
 	return pacificaParser{}
 }
 
+func NewNadoMarketPriceParser() Parser {
+	return nadoMarketPriceParser{}
+}
+
 type genericParser struct{}
 
 func (genericParser) Subscribe(Config) []byte {
@@ -323,6 +327,39 @@ func parseAster(value any) Snapshot {
 	bids := parseLevels(root["b"], true)
 	asks := parseLevels(root["a"], false)
 	return snapshotFromLevels(bids, asks, unixMillis(root["E"]))
+}
+
+type nadoMarketPriceParser struct{}
+
+func (nadoMarketPriceParser) Subscribe(Config) []byte {
+	return nil
+}
+
+func (nadoMarketPriceParser) Parse(data []byte) (Snapshot, bool) {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return Snapshot{}, false
+	}
+	body := confirmMap(root["data"])
+	if len(body) == 0 {
+		body = root
+	}
+	bid := scaledX18(firstPresent(body, "bid_x18", "bid_price"))
+	ask := scaledX18(firstPresent(body, "ask_x18", "ask_price"))
+	bidSize := scaledX18(firstPresent(body, "bid_qty", "bid_size"))
+	askSize := scaledX18(firstPresent(body, "ask_qty", "ask_size"))
+	if bid <= 0 || ask <= 0 {
+		return Snapshot{}, false
+	}
+	return Snapshot{
+		Bid:        bid,
+		BidSize:    bidSize,
+		Ask:        ask,
+		AskSize:    askSize,
+		Bids:       []Level{{Price: bid, Size: bidSize}},
+		Asks:       []Level{{Price: ask, Size: askSize}},
+		ExchangeAt: unixNanos(firstPresent(body, "timestamp", "time", "t")),
+	}, true
 }
 
 type pacificaParser struct{}
@@ -682,6 +719,14 @@ func number(value any) float64 {
 	}
 }
 
+func scaledX18(value any) float64 {
+	raw := number(value)
+	if raw <= 0 || math.IsNaN(raw) {
+		return 0
+	}
+	return raw / 1e18
+}
+
 func text(value any) string {
 	if value == nil {
 		return ""
@@ -708,6 +753,14 @@ func unixMicros(value any) time.Time {
 		return time.Time{}
 	}
 	return time.UnixMicro(int64(micros)).UTC()
+}
+
+func unixNanos(value any) time.Time {
+	nanos := number(value)
+	if nanos <= 0 || math.IsNaN(nanos) {
+		return time.Time{}
+	}
+	return time.Unix(0, int64(nanos)).UTC()
 }
 
 func lighterTime(root map[string]any, body map[string]any) time.Time {

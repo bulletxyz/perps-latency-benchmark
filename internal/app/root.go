@@ -35,7 +35,9 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(compare)
 	root.AddCommand(newCompareResultsCommand())
 	root.AddCommand(newServeCommand())
+	root.AddCommand(newCollectExchangeTPSCommand())
 	root.AddCommand(newServiceTopologyCommand())
 	root.AddCommand(newAccountsCommand())
+	root.AddCommand(newFundingCommand())
 	return root
 }

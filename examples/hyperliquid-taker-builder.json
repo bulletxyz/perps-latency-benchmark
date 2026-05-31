@@ -54,8 +54,12 @@
         "balance_source": "spot",
         "order_type": "market",
         "tif": "Ioc",
+        "neutralize_buy_price": "150000",
+        "neutralize_sell_price": "50000",
         "neutralize_slippage_bps": "100",
-        "debt_neutralize_pause_ms": 11000
+        "debt_neutralize_pause_ms": 11000,
+        "guard_preexisting_position": true,
+        "neutralize_preexisting_position": true
       }
     }
   }

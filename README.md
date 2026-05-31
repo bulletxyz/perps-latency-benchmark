@@ -190,6 +190,8 @@ Print the collector/API service topology before wiring process supervision:
 go run ./cmd/perps-bench service-topology \
   --config examples/lighter-builder.json \
   --env-file .env.wallets.local \
+  --exchange-tps-venue hyperliquid \
+  --validate-binary ./perps-bench \
   --store data/bench.db \
   --listen 127.0.0.1:8080
 ```

@@ -17,6 +17,11 @@ import {
 } from "react"
 
 import type { Sample } from "@/api/bench"
+import {
+  CSVExportButton,
+  type CSVColumn,
+  type CSVWindowOption,
+} from "@/components/dashboard/csv-export-button"
 import { VenueName, formatVenueLabel } from "@/components/dashboard/venue-logo"
 import { samplePlotDate } from "@/lib/sample-time"
 import { formatLatency, formatTime } from "@/lib/format"
@@ -32,6 +37,7 @@ interface Series {
 }
 
 interface DisplaySeries extends Series {
+  bandPoints: Array<BandPoint>
   linePoints: Array<Point>
   outlierCount: number
   rawPoints: Array<Point>
@@ -42,6 +48,12 @@ interface Point {
   kind: "raw" | "rolling-median"
   ms: number
   sampleCount?: number
+}
+
+interface BandPoint {
+  date: Date
+  lowerMS: number
+  upperMS: number
 }
 
 interface HoverPoint {
@@ -70,11 +82,15 @@ const COLORS = [
 ]
 
 const MARGIN = { top: 18, right: 20, bottom: 34, left: 62 }
-const ROLLING_MEDIAN_POINTS = 9
+const TREND_WINDOW_MS = 30 * 60 * 1000
+const TREND_STEP_MS = 5 * 60 * 1000
+const TREND_TARGET_POINTS = 900
+const TREND_LABEL = "Trend median"
 const TOOLTIP_HIT_RADIUS_PX = 28
 
 export function LatencyTimeseriesChart({
   samples,
+  isLoading = false,
   scaleMode,
   selectedVenues,
   venues,
@@ -84,10 +100,16 @@ export function LatencyTimeseriesChart({
   description = "Confirmation latency over time by venue.",
   emptyMessage = "No latency data is available for the selected filters.",
   headerActions,
+  defaultExportWindow,
+  exportWindowOptions,
+  forceTrendOnly = false,
+  loadExportSamples,
+  showExports = true,
   valueForSample = confirmSampleMs,
   valueLabel = "Latency",
 }: {
   samples: Array<Sample>
+  isLoading?: boolean
   scaleMode: LatencyScaleMode
   selectedVenues: Array<string>
   venues: Array<string>
@@ -97,11 +119,19 @@ export function LatencyTimeseriesChart({
   description?: string
   emptyMessage?: string
   headerActions?: ReactNode
+  defaultExportWindow?: string
+  exportWindowOptions?: ReadonlyArray<CSVWindowOption>
+  forceTrendOnly?: boolean
+  loadExportSamples?: (window: string) => Promise<Array<Sample>>
+  showExports?: boolean
   valueForSample?: (sample: Sample) => number | undefined
   valueLabel?: string
 }) {
   const [displayMode, setDisplayMode] =
     useState<LatencyDisplayMode>("trend-raw")
+  const effectiveDisplayMode: LatencyDisplayMode = forceTrendOnly
+    ? "trend"
+    : displayMode
   const [hideOutliers, setHideOutliers] = useState(true)
   const series = useMemo(
     () => buildSeries(samples, valueForSample),
@@ -110,14 +140,18 @@ export function LatencyTimeseriesChart({
   const displaySeries = useMemo(
     () =>
       buildDisplaySeries(series, {
-        displayMode,
+        displayMode: effectiveDisplayMode,
         hideOutliers,
       }),
-    [displayMode, hideOutliers, series]
+    [effectiveDisplayMode, hideOutliers, series]
   )
   const domain = useMemo(
     () => getDomains(displaySeries, scaleMode),
     [displaySeries, scaleMode]
+  )
+  const exportRows = useMemo(
+    () => latencyExportRows(samples, valueForSample, valueLabel),
+    [samples, valueForSample, valueLabel]
   )
 
   return (
@@ -132,10 +166,34 @@ export function LatencyTimeseriesChart({
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {headerActions}
-            <DisplayModeToggle
-              value={displayMode}
-              onChange={setDisplayMode}
-            />
+            {showExports ? (
+              <CSVExportButton
+                columns={LATENCY_EXPORT_COLUMNS}
+                defaultWindow={defaultExportWindow}
+                filename={`${title}-data.csv`}
+                filenameForWindow={(window) => `${title}-${window}-data.csv`}
+                loadRows={
+                  loadExportSamples
+                    ? async (window) =>
+                        latencyExportRows(
+                          await loadExportSamples(window),
+                          valueForSample,
+                          valueLabel
+                        )
+                    : undefined
+                }
+                rows={exportRows}
+                windowOptions={exportWindowOptions}
+              />
+            ) : null}
+            {forceTrendOnly ? (
+              <TrendOnlyToggle />
+            ) : (
+              <DisplayModeToggle
+                value={displayMode}
+                onChange={setDisplayMode}
+              />
+            )}
             <OutlierToggle
               checked={hideOutliers}
               onChange={setHideOutliers}
@@ -149,9 +207,16 @@ export function LatencyTimeseriesChart({
           onChange={onVenueSelectionChange}
         />
         <SeriesLegend series={displaySeries} hideOutliers={hideOutliers} />
+        {displayMode !== "raw" ? (
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            Shaded bands show IQR.
+          </div>
+        ) : null}
       </div>
       <div className="h-[360px] px-2 py-3">
-        {displaySeries.length === 0 || !domain ? (
+        {isLoading ? (
+          <ChartLoadingState />
+        ) : displaySeries.length === 0 || !domain ? (
           <div className="flex h-full items-center px-2 text-[11px] text-muted-foreground">
             {emptyMessage}
           </div>
@@ -161,7 +226,7 @@ export function LatencyTimeseriesChart({
               <LatencyFrame
                 domain={domain}
                 height={height}
-                displayMode={displayMode}
+                displayMode={effectiveDisplayMode}
                 scaleMode={scaleMode}
                 series={displaySeries}
                 valueLabel={valueLabel}
@@ -172,6 +237,97 @@ export function LatencyTimeseriesChart({
         )}
       </div>
     </section>
+  )
+}
+
+interface LatencyExportRow {
+  batchSubmission?: string
+  batchSize: number
+  completedAt?: string
+  measurementMode?: string
+  networkFloorMS?: number
+  orderType?: string
+  plotAt: Date
+  rawNetworkMS?: number
+  scenario: string
+  scheduledAt?: string
+  sentAt?: string
+  speedBumpMS?: number
+  transport: string
+  valueLabel: string
+  valueMS: number
+  venue: string
+}
+
+const LATENCY_EXPORT_COLUMNS: Array<CSVColumn<LatencyExportRow>> = [
+  { header: "plot_at", value: (row) => row.plotAt },
+  { header: "completed_at", value: (row) => row.completedAt },
+  { header: "scheduled_at", value: (row) => row.scheduledAt },
+  { header: "sent_at", value: (row) => row.sentAt },
+  { header: "venue", value: (row) => row.venue },
+  { header: "scenario", value: (row) => row.scenario },
+  { header: "transport", value: (row) => row.transport },
+  { header: "order_type", value: (row) => row.orderType },
+  { header: "batch_size", value: (row) => row.batchSize },
+  { header: "batch_submission", value: (row) => row.batchSubmission },
+  { header: "measurement_mode", value: (row) => row.measurementMode },
+  { header: "metric", value: (row) => row.valueLabel },
+  { header: "latency_ms", value: (row) => row.valueMS },
+  { header: "raw_network_ms", value: (row) => row.rawNetworkMS },
+  { header: "network_floor_ms", value: (row) => row.networkFloorMS },
+  { header: "speed_bump_ms", value: (row) => row.speedBumpMS },
+]
+
+function latencyExportRows(
+  samples: Array<Sample>,
+  valueForSample: (sample: Sample) => number | undefined,
+  valueLabel: string
+) {
+  return samples.flatMap((sample): Array<LatencyExportRow> => {
+    const plotAt = samplePlotDate(sample)
+    const valueMS = valueForSample(sample)
+    if (!plotAt || valueMS === undefined || !Number.isFinite(valueMS)) {
+      return []
+    }
+    return [
+      {
+        batchSize: sample.batch_size,
+        batchSubmission: sample.batch_submission,
+        completedAt: sample.completed_at,
+        measurementMode: sample.measurement_mode,
+        networkFloorMS: nsToExportMS(sample.network_floor_ns),
+        orderType: sample.order_type,
+        plotAt,
+        rawNetworkMS: nsToExportMS(sample.raw_network_ns),
+        scenario: sample.scenario,
+        scheduledAt: sample.scheduled_at,
+        sentAt: sample.sent_at,
+        speedBumpMS: nsToExportMS(sample.speed_bump_ns),
+        transport: sample.transport,
+        valueLabel,
+        valueMS,
+        venue: sample.venue,
+      },
+    ]
+  })
+}
+
+function nsToExportMS(value?: number) {
+  return value !== undefined && Number.isFinite(value) && value >= 0
+    ? value / 1_000_000
+    : undefined
+}
+
+function ChartLoadingState() {
+  return (
+    <div
+      className="flex h-full flex-col items-center justify-center gap-3 px-2 py-1 text-[11px] text-muted-foreground"
+      aria-label="Loading latency chart"
+      role="status"
+    >
+      <div className="size-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+      <span>Loading latency data</span>
+    </div>
   )
 }
 
@@ -345,7 +501,7 @@ function LatencySvg({
           tickValues={yTickValues}
           numTicks={5}
           width={innerWidth}
-          stroke="oklch(0.88 0.004 255 / 0.7)"
+          stroke="var(--chart-grid)"
           strokeDasharray="3 4"
         />
         <AxisLeft
@@ -354,13 +510,13 @@ function LatencySvg({
           numTicks={5}
           tickFormat={(value) => formatLatency(Number(value))}
           tickLabelProps={() => ({
-            fill: "oklch(0.48 0.015 253)",
+            fill: "var(--chart-text)",
             fontFamily: "JetBrains Mono Variable",
             fontSize: 10,
             textAnchor: "end",
           })}
-          stroke="oklch(0.9 0.004 255)"
-          tickStroke="oklch(0.9 0.004 255)"
+          stroke="var(--chart-axis)"
+          tickStroke="var(--chart-axis)"
         />
         <AxisBottom
           top={innerHeight}
@@ -368,13 +524,13 @@ function LatencySvg({
           numTicks={xTickCount}
           tickFormat={(value) => formatTime(new Date(value.valueOf()))}
           tickLabelProps={() => ({
-            fill: "oklch(0.48 0.015 253)",
+            fill: "var(--chart-text)",
             fontFamily: "JetBrains Mono Variable",
             fontSize: 10,
             textAnchor: "middle",
           })}
-          stroke="oklch(0.9 0.004 255)"
-          tickStroke="oklch(0.9 0.004 255)"
+          stroke="var(--chart-axis)"
+          tickStroke="var(--chart-axis)"
         />
         <Group clipPath={`url(#${clipId})`}>
           <rect
@@ -385,6 +541,14 @@ function LatencySvg({
           />
           {series.map((item) => (
             <Group key={item.key}>
+              {displayMode !== "raw" && item.bandPoints.length > 1 ? (
+                <path
+                  d={bandAreaPath(item.bandPoints, xScale, yScale)}
+                  fill={item.color}
+                  opacity={0.12}
+                  pointerEvents="none"
+                />
+              ) : null}
               {displayMode === "trend-raw" && item.rawPoints.length > 0 ? (
                 <path
                   d={pointMarkerPath(item.rawPoints, xScale, yScale, 1.8)}
@@ -393,15 +557,17 @@ function LatencySvg({
                   pointerEvents="none"
                 />
               ) : null}
-              <LinePath
-                data={item.linePoints}
-                x={(point) => xScale(point.date)}
-                y={(point) => yScale(point.ms)}
-                pointerEvents="none"
-                stroke={item.color}
-                strokeDasharray={item.strokeDasharray}
-                strokeWidth={1.7}
-              />
+              {displayMode !== "raw" ? (
+                <LinePath
+                  data={item.linePoints}
+                  x={(point) => xScale(point.date)}
+                  y={(point) => yScale(point.ms)}
+                  pointerEvents="none"
+                  stroke={item.color}
+                  strokeDasharray={item.strokeDasharray}
+                  strokeWidth={1.7}
+                />
+              ) : null}
               {displayMode !== "trend-raw" && item.linePoints.length > 0 ? (
                 <path
                   d={pointMarkerPath(item.linePoints, xScale, yScale, 2.4)}
@@ -426,7 +592,7 @@ function LatencySvg({
               cy={activePoint.y}
               r={4}
               fill={activePoint.color}
-              stroke="white"
+              stroke="var(--chart-point-stroke)"
               strokeWidth={1.5}
               pointerEvents="none"
             />
@@ -472,7 +638,7 @@ function PointTooltip({
       </div>
       <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
         <span className="-mx-1 rounded-sm bg-surface-2 px-1 py-0.5 font-bold text-foreground">
-          {hover.point.kind === "rolling-median" ? "Rolling median" : valueLabel}
+          {hover.point.kind === "rolling-median" ? TREND_LABEL : valueLabel}
         </span>
         <span className="-mx-1 rounded-sm bg-surface-2 px-1 py-0.5 font-mono font-bold text-foreground">
           {formatLatency(hover.point.ms)}
@@ -512,7 +678,7 @@ function DisplayModeToggle({
           onClick={() => onChange(mode.value)}
           className={`px-2.5 ${
             value === mode.value
-              ? "bg-foreground text-background"
+              ? "bg-primary/15 text-foreground ring-1 ring-inset ring-primary/40"
               : "text-muted-foreground hover:bg-surface-2 hover:text-foreground"
           }`}
           aria-pressed={value === mode.value}
@@ -520,6 +686,20 @@ function DisplayModeToggle({
           {mode.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+function TrendOnlyToggle() {
+  return (
+    <div className="flex h-8 overflow-hidden rounded-sm border border-border bg-surface-1 text-[11px]">
+      <button
+        type="button"
+        className="bg-primary/15 px-2.5 text-foreground ring-1 ring-inset ring-primary/40"
+        disabled
+      >
+        Trend
+      </button>
     </div>
   )
 }
@@ -560,7 +740,7 @@ function ScaleToggle({
           onClick={() => onChange(mode)}
           className={`px-2.5 capitalize ${
             value === mode
-              ? "bg-foreground text-background"
+              ? "bg-primary/15 text-foreground ring-1 ring-inset ring-primary/40"
               : "text-muted-foreground hover:bg-surface-2 hover:text-foreground"
           }`}
           aria-pressed={value === mode}
@@ -705,6 +885,45 @@ function pointMarkerPath(
     .join("")
 }
 
+function bandAreaPath(
+  points: Array<BandPoint>,
+  xScale: DateScale,
+  yScale: NumberScale
+) {
+  const top = points
+    .map((point) => scaledBandCoordinate(point.date, point.upperMS, xScale, yScale))
+    .filter((point): point is [number, number] => point !== null)
+  const bottom = points
+    .map((point) => scaledBandCoordinate(point.date, point.lowerMS, xScale, yScale))
+    .filter((point): point is [number, number] => point !== null)
+    .reverse()
+  const coordinates = [...top, ...bottom]
+
+  if (coordinates.length < 3) {
+    return ""
+  }
+
+  return coordinates
+    .map(([x, y], index) =>
+      `${index === 0 ? "M" : "L"}${formatSVGNumber(x)},${formatSVGNumber(y)}`
+    )
+    .join("") + "Z"
+}
+
+function scaledBandCoordinate(
+  date: Date,
+  ms: number,
+  xScale: DateScale,
+  yScale: NumberScale
+): [number, number] | null {
+  const x = xScale(date)
+  const y = yScale(ms)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null
+  }
+  return [x, y]
+}
+
 function nearestHoverPoint(
   series: Array<DisplaySeries>,
   plotX: number,
@@ -772,7 +991,7 @@ function buildSeries(
   const grouped = new Map<string, Array<Point>>()
 
   for (const sample of samples) {
-    if (!sample.ok || sample.warmup || sample.network_ns <= 0) {
+    if (!sample.ok || sample.warmup) {
       continue
     }
 
@@ -818,6 +1037,9 @@ function batchSubmission(sample: Sample) {
   if (sample.scenario !== "batch") {
     return ""
   }
+  if (sample.batch_submission === "manual" || sample.batch_submission === "native") {
+    return sample.batch_submission
+  }
   if (sample.metadata?.native_batch_endpoint === false) {
     return "manual"
   }
@@ -856,11 +1078,12 @@ function buildDisplaySeries(
       const { outlierCount, points: visibleRawPoints } = hideOutliers
         ? withoutUpperOutliers(item.points)
         : { outlierCount: 0, points: item.points }
-      const trendPoints = rollingMedian(item.points, ROLLING_MEDIAN_POINTS)
+      const trend = rollingTrend(visibleRawPoints)
 
       return {
         ...item,
-        linePoints: displayMode === "raw" ? visibleRawPoints : trendPoints,
+        bandPoints: displayMode === "raw" ? [] : trend.bandPoints,
+        linePoints: displayMode === "raw" ? visibleRawPoints : trend.linePoints,
         outlierCount,
         rawPoints: displayMode === "trend-raw" ? visibleRawPoints : [],
       }
@@ -868,21 +1091,100 @@ function buildDisplaySeries(
     .filter((item) => item.linePoints.length > 0 || item.rawPoints.length > 0)
 }
 
-function rollingMedian(points: Array<Point>, windowSize: number): Array<Point> {
+function rollingTrend(points: Array<Point>): {
+  bandPoints: Array<BandPoint>
+  linePoints: Array<Point>
+} {
   if (points.length === 0) {
-    return []
+    return { bandPoints: [], linePoints: [] }
   }
 
-  return points.map((point, index) => {
-    const start = Math.max(0, index - windowSize + 1)
-    const window = points.slice(start, index + 1)
-    return {
-      date: point.date,
-      kind: "rolling-median",
-      ms: median(window.map((item) => item.ms)),
-      sampleCount: window.length,
+  const { stepMS, windowMS } = trendResolution(points)
+  const startTime = floorToStep(points[0].date.getTime(), stepMS)
+  const endTime = points[points.length - 1].date.getTime()
+  const halfWindow = windowMS / 2
+  const bandPoints: Array<BandPoint> = []
+  const linePoints: Array<Point> = []
+  let startIndex = 0
+  let endIndex = 0
+
+  for (let time = startTime; time <= endTime; time += stepMS) {
+    const minTime = time - halfWindow
+    const maxTime = time + halfWindow
+
+    while (
+      startIndex < points.length &&
+      points[startIndex].date.getTime() < minTime
+    ) {
+      startIndex += 1
     }
-  })
+    while (
+      endIndex < points.length &&
+      points[endIndex].date.getTime() <= maxTime
+    ) {
+      endIndex += 1
+    }
+
+    const values = points
+      .slice(startIndex, endIndex)
+      .map((point) => point.ms)
+      .sort((left, right) => left - right)
+
+    if (values.length === 0) {
+      continue
+    }
+
+    const date = new Date(time)
+    linePoints.push({
+      date,
+      kind: "rolling-median",
+      ms: quantile(values, 0.5),
+      sampleCount: values.length,
+    })
+    bandPoints.push({
+      date,
+      lowerMS: quantile(values, 0.25),
+      upperMS: quantile(values, 0.75),
+    })
+  }
+
+  return { bandPoints, linePoints }
+}
+
+function floorToStep(value: number, step: number) {
+  return Math.floor(value / step) * step
+}
+
+function trendResolution(points: Array<Point>) {
+  const start = points[0]?.date.getTime() ?? 0
+  const end = points[points.length - 1]?.date.getTime() ?? start
+  const span = Math.max(end - start, TREND_STEP_MS)
+  const targetStep = Math.max(
+    TREND_STEP_MS,
+    Math.ceil(span / TREND_TARGET_POINTS)
+  )
+  const stepMS = roundUpToNiceInterval(targetStep)
+  return {
+    stepMS,
+    windowMS: Math.max(TREND_WINDOW_MS, stepMS * 6),
+  }
+}
+
+function roundUpToNiceInterval(value: number) {
+  const intervals = [
+    5 * 60 * 1000,
+    10 * 60 * 1000,
+    15 * 60 * 1000,
+    30 * 60 * 1000,
+    60 * 60 * 1000,
+    2 * 60 * 60 * 1000,
+    4 * 60 * 60 * 1000,
+    6 * 60 * 60 * 1000,
+    12 * 60 * 60 * 1000,
+    24 * 60 * 60 * 1000,
+    7 * 24 * 60 * 60 * 1000,
+  ]
+  return intervals.find((interval) => interval >= value) ?? intervals[intervals.length - 1]
 }
 
 function withoutUpperOutliers(points: Array<Point>) {
@@ -901,13 +1203,6 @@ function withoutUpperOutliers(points: Array<Point>) {
     outlierCount: points.length - filtered.length,
     points: filtered,
   }
-}
-
-function median(values: Array<number>) {
-  return quantile(
-    [...values].sort((a, b) => a - b),
-    0.5
-  )
 }
 
 function quantile(sortedValues: Array<number>, q: number) {
@@ -930,6 +1225,10 @@ function getDomains(series: Array<DisplaySeries>, scaleMode: LatencyScaleMode) {
   const points = series.flatMap((item) => [
     ...item.linePoints,
     ...item.rawPoints,
+    ...item.bandPoints.flatMap((point) => [
+      { date: point.date, kind: "rolling-median" as const, ms: point.lowerMS },
+      { date: point.date, kind: "rolling-median" as const, ms: point.upperMS },
+    ]),
   ])
 
   if (points.length === 0) {
@@ -1022,5 +1321,6 @@ const KNOWN_VENUE_COLORS: Record<string, string> = {
   lighter: "oklch(0.55 0.17 245)",
   lighter_free: "oklch(0.66 0.16 220)",
   nado: "oklch(0.55 0.18 305)",
+  nado_direct: "oklch(0.65 0.16 325)",
   variational_omni: "oklch(0.62 0.15 75)",
 }
