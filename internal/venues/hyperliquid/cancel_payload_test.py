@@ -65,6 +65,35 @@ class HyperliquidCancelPayloadTest(unittest.TestCase):
 
         sleep.assert_not_called()
 
+    def test_active_symbol_orders_selects_configured_symbol_with_cloids(self):
+        class Account:
+            @staticmethod
+            def from_key(_key):
+                class Wallet:
+                    address = "0xabc"
+
+                return Wallet()
+
+        class Info:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def open_orders(self, _address):
+                return [
+                    {"coin": "BTC", "cloid": "0xbtc"},
+                    {"coin": "ETH", "cloid": "0xeth"},
+                    {"coin": "BTC"},
+                ]
+
+        got = cancel_payload.active_symbol_orders(
+            {"secret_key": "0x" + "1" * 64, "symbol": "BTC", "asset": 0},
+            Account,
+            Info,
+            "https://api.hyperliquid.xyz",
+        )
+
+        self.assertEqual(got, [{"venue": "hyperliquid", "asset": 0, "coin": "BTC", "cloid": "0xbtc"}])
+
 
 if __name__ == "__main__":
     unittest.main()

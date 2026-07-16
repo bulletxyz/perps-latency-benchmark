@@ -9,7 +9,7 @@ const METHODOLOGIES = [
   },
   {
     venue: "Extended",
-    text: "Post-only BTC order. Confirm latency is measured from completed order-submit write to the matching private account order/trade WebSocket event for the external order ID. Extended taker latency is adjusted by its 150 ms order-entry speed bump. Batch view labels documented native batch separately from manual fanout.",
+    text: "Post-only BTC order. Confirm latency is measured from completed order-submit write to the matching private account order/trade WebSocket event for the external order ID. Batch view labels documented native batch separately from manual fanout.",
   },
   {
     venue: "Nado",

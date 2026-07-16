@@ -9,7 +9,7 @@ import (
 	"perps-latency-benchmark/internal/bench"
 )
 
-const extendedVenueSpeedBumpNS int64 = 150_000_000
+const extendedVenueSpeedBumpNS int64 = 0
 
 type DashboardSamplesReadModel struct {
 	Samples []DashboardSample `json:"samples"`
@@ -739,11 +739,11 @@ func isAccountFeedCancelCleanup(ok bool, description string, confirmation string
 }
 
 func effectiveDashboardSpeedBumpNS(venue string, orderType string, speedBumpNS int64) int64 {
-	if speedBumpNS > 0 && !isExtendedDashboardNonTaker(venue, orderType) {
-		return speedBumpNS
-	}
 	if isExtendedDashboardTaker(venue, orderType) {
 		return extendedVenueSpeedBumpNS
+	}
+	if speedBumpNS > 0 && !isExtendedDashboardNonTaker(venue, orderType) {
+		return speedBumpNS
 	}
 	return 0
 }

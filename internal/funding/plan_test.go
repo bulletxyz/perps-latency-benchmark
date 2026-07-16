@@ -20,6 +20,26 @@ func TestPlanDepositSkipsHealthyBalance(t *testing.T) {
 	}
 }
 
+func TestPlanDepositUsesFundingBalanceMetadata(t *testing.T) {
+	now := time.Unix(100, 0)
+	decision := PlanDeposit(Config{DryRun: true}, AccountConfig{
+		Name:             "hyperliquid",
+		MinBalanceUSD:    20,
+		TargetBalanceUSD: 50,
+		Deposit:          DepositConfig{MinUSDC: 5},
+	}, bench.BalanceSnapshot{
+		BalanceUSD: 25,
+		Metadata:   map[string]any{"funding_balance_usd": "2.5"},
+	}, AccountState{}, now)
+
+	if decision.Plan == nil {
+		t.Fatalf("missing plan: %+v", decision)
+	}
+	if decision.Plan.Amount != 47.5 {
+		t.Fatalf("amount = %f, want 47.5", decision.Plan.Amount)
+	}
+}
+
 func TestPlanDepositClampsToMaxDeposit(t *testing.T) {
 	now := time.Unix(100, 0)
 	decision := PlanDeposit(Config{DryRun: true}, AccountConfig{

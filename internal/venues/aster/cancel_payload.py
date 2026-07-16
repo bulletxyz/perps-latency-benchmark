@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from cleanup_common import cleanup_orders_for_venue, cleanup_result, result_orders_for_venue
+from cleanup_common import cleanup_orders_for_venue, cleanup_result, mark_self_heal_position, result_orders_for_venue, self_heal_preexisting_position
 from build_payload import DEFAULT_WS_BASE_URL, cached_listen_key, client_order_id, compact_json, load_signer
 
 
@@ -108,6 +108,9 @@ class AsterClient:
 
     def create_market_order(self, symbol: str, side: str, quantity: Decimal) -> tuple[int, Any]:
         body = self.market_order_body(symbol, side, quantity)
+        return self.submit_order_body(body)
+
+    def submit_order_body(self, body: str) -> tuple[int, Any]:
         request = urllib.request.Request(
             self.base_url + "/fapi/v3/order",
             data=body.encode(),
@@ -171,6 +174,9 @@ def before_run(client: AsterClient, params: dict[str, Any], builder_params: dict
             return cancelled
         metadata = dict(cancelled_result.get("metadata") or metadata)
     if bool(builder_params.get("neutralize_on_fill")) and signed_position_size(position, symbol) != 0:
+        repair = neutralize_preexisting_position(client, params, builder_params, position)
+        if repair:
+            return repair
         return cleanup_result(
             True,
             False,
@@ -362,6 +368,51 @@ def neutralize_position(client: AsterClient, params: dict[str, Any], builder_par
             "reconciliation": reconciliation,
         },
     }
+
+
+def neutralize_preexisting_position(client: AsterClient, params: dict[str, Any], builder_params: dict[str, Any], position: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not position or not self_heal_preexisting_position(builder_params):
+        return None
+    repair_params = dict(params)
+    repair_params["run_metadata"] = {"position": []}
+    repair_builder_params = dict(builder_params)
+    repair_builder_params["neutralize_on_fill"] = True
+    payload = neutralize_position(client, repair_params, repair_builder_params)
+    if not payload:
+        return None
+    marked = mark_self_heal_position(payload, "aster", position)
+    status, body = client.submit_order_body(str(marked["body"]))
+    if not response_ok(status, body):
+        return cleanup_result(
+            True,
+            False,
+            "Aster startup neutralize failed: " + response_reason(body),
+            metadata={"position": position, **dict(marked.get("metadata") or {})},
+        )
+    symbol = str(builder_params.get("symbol", "BTCUSDT")).upper()
+    after_position = wait_position_snapshot(client, builder_params, [])
+    metadata = {"position_before": position, "position_after": after_position, **dict(marked.get("metadata") or {})}
+    if signed_position_size(after_position, symbol) != 0:
+        return cleanup_result(
+            True,
+            False,
+            "Aster position remained open after startup neutralize",
+            metadata=metadata,
+        )
+    return cleanup_result(True, True, "flattened Aster position before run", metadata=metadata)
+
+
+def wait_position_snapshot(client: AsterClient, params: dict[str, Any], target: Any) -> list[dict[str, str]]:
+    symbol = str(params.get("symbol", "BTCUSDT")).upper()
+    attempts = max(1, int(params.get("position_reconciliation_poll_attempts", 20)))
+    interval = max(0, int(params.get("position_reconciliation_poll_interval_ms", 500))) / 1000
+    current = client.position_snapshot(symbol)
+    for attempt in range(attempts):
+        if current == target or attempt == attempts - 1:
+            return current
+        time.sleep(interval)
+        current = client.position_snapshot(symbol)
+    return current
 
 
 def signed_position_size(positions: list[dict[str, Any]], symbol: str) -> Decimal:

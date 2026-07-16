@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -63,5 +64,93 @@ func TestResultFromNetworkWithConfirmationUsesAccountFeedLatency(t *testing.T) {
 	}
 	if cleanup.Metadata["cancel_ack_duration_ns"] != int64(time.Millisecond) || cleanup.Metadata["cancel_ack_status_code"] != 200 || cleanup.Metadata["cancel_ack_bytes_read"] != int64(17) || cleanup.Metadata["cancel_ack_transport"] != "http" {
 		t.Fatalf("ack metadata = %#v", cleanup.Metadata)
+	}
+}
+
+func TestResultFromNetworkWithConfirmationFallsBackToStatePoll(t *testing.T) {
+	start := time.Now().Add(-10 * time.Millisecond)
+	ack := netlatency.Result{
+		StatusCode: 200,
+		BytesRead:  17,
+		Body:       []byte(`{"ok":true}`),
+		Trace: netlatency.Trace{
+			StartedAt: start,
+			TotalNS:   int64(time.Millisecond),
+			Transport: "http",
+		},
+	}
+	verified := netlatency.Result{
+		BytesRead: 99,
+		Trace: netlatency.Trace{
+			StartedAt: start,
+			TotalNS:   int64(7 * time.Millisecond),
+			Transport: "http_state_poll",
+		},
+	}
+
+	cleanup := cleanupExecution{}.resultFromNetworkWithConfirmation(
+		context.Background(),
+		ack,
+		nil,
+		123,
+		payload.Built{Metadata: map[string]any{"cleanup": "cancel benchmark orders"}},
+		&bench.Confirmation{
+			Wait: func(context.Context, netlatency.Result) (netlatency.Result, error) {
+				return netlatency.Result{}, context.DeadlineExceeded
+			},
+			Verify: func(context.Context, netlatency.Result) (netlatency.Result, bool, error) {
+				return verified, true, nil
+			},
+		},
+		time.Second,
+	)
+
+	if !cleanup.OK {
+		t.Fatalf("cleanup.OK = false, error = %q", cleanup.Error)
+	}
+	if cleanup.Metadata["cleanup_confirmation"] != "state_poll" || cleanup.Metadata["cleanup_confirmation_transport"] != "http_state_poll" {
+		t.Fatalf("confirmation metadata = %#v", cleanup.Metadata)
+	}
+	if cleanup.Metadata["cleanup_confirmation_fallback_error"] != context.DeadlineExceeded.Error() {
+		t.Fatalf("fallback error metadata = %#v", cleanup.Metadata)
+	}
+	if cleanup.DurationNS != int64(7*time.Millisecond) || cleanup.BytesRead != 99 {
+		t.Fatalf("state poll timing = duration %d bytes %d", cleanup.DurationNS, cleanup.BytesRead)
+	}
+}
+
+func TestResultFromNetworkWithConfirmationReportsStatePollError(t *testing.T) {
+	start := time.Now().Add(-10 * time.Millisecond)
+	ack := netlatency.Result{
+		StatusCode: 200,
+		Body:       []byte(`{"ok":true}`),
+		Trace: netlatency.Trace{
+			StartedAt: start,
+			TotalNS:   int64(time.Millisecond),
+		},
+	}
+
+	cleanup := cleanupExecution{}.resultFromNetworkWithConfirmation(
+		context.Background(),
+		ack,
+		nil,
+		123,
+		payload.Built{Metadata: map[string]any{"cleanup": "cancel benchmark orders"}},
+		&bench.Confirmation{
+			Wait: func(context.Context, netlatency.Result) (netlatency.Result, error) {
+				return netlatency.Result{}, context.DeadlineExceeded
+			},
+			Verify: func(context.Context, netlatency.Result) (netlatency.Result, bool, error) {
+				return netlatency.Result{}, false, errors.New("active orders unavailable")
+			},
+		},
+		time.Second,
+	)
+
+	if cleanup.OK {
+		t.Fatal("cleanup.OK = true, want false")
+	}
+	if cleanup.Error != "cancel confirmation: context deadline exceeded; state verification: active orders unavailable" {
+		t.Fatalf("cleanup error = %q", cleanup.Error)
 	}
 }

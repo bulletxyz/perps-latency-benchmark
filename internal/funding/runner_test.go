@@ -93,6 +93,46 @@ func TestRunnerIsolatesAccountFailures(t *testing.T) {
 	}
 }
 
+func TestRunnerRecordsSkippedBalanceObservation(t *testing.T) {
+	now := time.Unix(300, 0)
+	runner := Runner{
+		Config: Config{
+			DryRun: true,
+			Accounts: []AccountConfig{{
+				Name:             "hyperliquid",
+				MinBalanceUSD:    20,
+				TargetBalanceUSD: 50,
+			}},
+		},
+		Balances: fakeBalanceReader{
+			balances: map[string]bench.BalanceSnapshot{
+				"hyperliquid": {
+					BalanceUSD: 25,
+					Metadata: map[string]any{
+						"spot_usdc_total": "25",
+						"withdrawable":    "0.2",
+					},
+				},
+			},
+		},
+		Deposit: fakeDepositor{},
+	}
+	results, err := runner.RunOnce(context.Background(), now)
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want no deposits", results)
+	}
+	account := runner.State.Accounts["hyperliquid"]
+	if account.LastStatus != "skipped" || account.LastError != "balance above threshold" || account.LastBalance != 25 {
+		t.Fatalf("account state = %+v", account)
+	}
+	if account.Metadata["withdrawable"] != "0.2" || account.Metadata["observed_at"] != now.UTC().Format(time.RFC3339) {
+		t.Fatalf("metadata = %#v", account.Metadata)
+	}
+}
+
 type fakeBalanceReader struct {
 	balances map[string]bench.BalanceSnapshot
 	errors   map[string]error

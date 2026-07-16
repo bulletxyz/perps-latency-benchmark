@@ -48,14 +48,14 @@
         "product_id": 2,
         "symbol": "BTC-PERP",
         "side": "buy",
-        "amount": "0.0016",
+        "amount": "0.002",
         "price": "77000",
         "post_only_price_source": "nado_market_price_http",
         "post_only_price_offset_bps": 500,
         "post_only_price_refresh_ms": 10000,
         "post_only_price_tick": 1,
         "order_type": "post_only",
-        "recv_window_ms": 5000,
+        "recv_window_ms": 30000,
         "confirmation": true,
         "cancel_confirmation": true
       }

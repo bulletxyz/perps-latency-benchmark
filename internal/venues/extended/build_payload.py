@@ -86,7 +86,7 @@ def build(
     order_type = str(params.get("order_type", "limit")).lower()
     tif = str(params.get("time_in_force", "GTT")).upper()
     bench_order_type = benchmark_order_type(order_type, tif, bool(params.get("post_only", True)))
-    speed_bump_ms = 150 if bench_order_type in {"market", "ioc"} else 0
+    speed_bump_ms = 0
 
     orders = [
         signed_order(
@@ -120,7 +120,7 @@ def build(
         "time_in_force": tif,
         "speed_bump_ns": speed_bump_ms * 1_000_000,
         "speed_bump_ms": speed_bump_ms,
-        "speed_bump_source": "Extended documents a 150 ms taker order-entry speed bump" if speed_bump_ms else "",
+        "speed_bump_source": "",
         "cleanup_orders": cleanup_orders,
         "confirmation": {
             "venue": "extended",

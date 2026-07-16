@@ -23,6 +23,9 @@ const (
 	defaultPostOnlyOffsetBPS     = 500
 	defaultPostOnlyHTTPRefreshMS = 5 * 60 * 1000
 	defaultPostOnlyHTTPTimeoutMS = 3000
+	defaultTakerBookWaitMS       = 5000
+	defaultTakerBookMaxAgeMS     = 2000
+	defaultTakerBufferBPS        = 150
 )
 
 func dynamicPostOnlyPricingEnabled(params map[string]any) bool {
@@ -52,6 +55,22 @@ func dynamicPostOnlyBookUnavailable(venue string) error {
 	return fmt.Errorf("%s dynamic post-only pricing requested, but no book-top stream is configured", venue)
 }
 
+func dynamicTakerPricingEnabled(params map[string]any) bool {
+	if boolParam(params, "dynamic_taker_price") {
+		return true
+	}
+	switch normalizedParam(params, "taker_price_source") {
+	case "book", "book_top", "top_of_book", "orderbook", "order_book":
+		return true
+	default:
+		return false
+	}
+}
+
+func dynamicTakerBookUnavailable(venue string) error {
+	return fmt.Errorf("%s dynamic taker pricing requested, but no book-top stream is configured", venue)
+}
+
 func dynamicPostOnlyPriceHook(venue string, params map[string]any, tracker *booktop.Tracker) prebuiltBuilderHook {
 	cfg := newDynamicPostOnlyConfig(venue, params)
 	return func(ctx context.Context, req payload.Request) (map[string]any, map[string]any, error) {
@@ -67,6 +86,25 @@ func dynamicPostOnlyPriceHook(venue string, params map[string]any, tracker *book
 		price := cfg.price(snapshot, side)
 		effective["price"] = cfg.paramPrice(price)
 		metadata := dynamicPostOnlyMetadata(cfg, "book_top", price, snapshot)
+		return effective, metadata, nil
+	}
+}
+
+func dynamicTakerPriceHook(venue string, params map[string]any, tracker *booktop.Tracker) prebuiltBuilderHook {
+	cfg := newDynamicTakerConfig(venue, params)
+	return func(ctx context.Context, req payload.Request) (map[string]any, map[string]any, error) {
+		effective := cloneParams(req.Params)
+		side := normalizedParam(effective, "side")
+		if side == "" {
+			side = "buy"
+		}
+		snapshot, err := waitForFreshBook(ctx, tracker, cfg.wait, cfg.maxAge)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s dynamic taker price: %w", venue, err)
+		}
+		price := cfg.price(snapshot, side)
+		effective["price"] = cfg.paramPrice(price)
+		metadata := dynamicTakerMetadata(cfg, "book_top", price, snapshot)
 		return effective, metadata, nil
 	}
 }
@@ -125,6 +163,68 @@ func newDynamicPostOnlyConfig(venue string, params map[string]any) dynamicPostOn
 		multiplier: dynamicPostOnlyPriceMultiplier(venue, params),
 		tick:       floatParam(params, "post_only_price_tick", 1),
 	}
+}
+
+type dynamicTakerConfig struct {
+	venue      string
+	bufferBPS  float64
+	wait       time.Duration
+	maxAge     time.Duration
+	multiplier float64
+	tick       float64
+}
+
+func newDynamicTakerConfig(venue string, params map[string]any) dynamicTakerConfig {
+	return dynamicTakerConfig{
+		venue:      venue,
+		bufferBPS:  floatParam(params, "taker_price_buffer_bps", defaultTakerBufferBPS),
+		wait:       durationMSParam(params, "taker_book_wait_ms", defaultTakerBookWaitMS),
+		maxAge:     durationMSParam(params, "taker_book_max_age_ms", defaultTakerBookMaxAgeMS),
+		multiplier: dynamicTakerPriceMultiplier(venue, params),
+		tick:       floatParam(params, "taker_price_tick", floatParam(params, "min_price_change", 1)),
+	}
+}
+
+func (c dynamicTakerConfig) price(snapshot booktop.Snapshot, side string) float64 {
+	buffer := c.bufferBPS / 10000
+	isSell := side == "sell" || side == "ask" || side == "short"
+	var raw float64
+	if isSell {
+		raw = snapshot.Bid * (1 - buffer) * c.multiplier
+		return roundToTick(raw, c.tick, math.Floor)
+	}
+	raw = snapshot.Ask * (1 + buffer) * c.multiplier
+	return roundToTick(raw, c.tick, math.Ceil)
+}
+
+func (c dynamicTakerConfig) paramPrice(price float64) any {
+	if c.venue == "lighter" {
+		return int64(price)
+	}
+	return decimalText(price)
+}
+
+func (c dynamicTakerConfig) displayPrice(price float64) any {
+	if c.multiplier == 0 || c.multiplier == 1 {
+		return decimalText(price)
+	}
+	return decimalText(price / c.multiplier)
+}
+
+func dynamicTakerMetadata(cfg dynamicTakerConfig, source string, price float64, snapshot booktop.Snapshot) map[string]any {
+	metadata := map[string]any{
+		"taker_price_source":     source,
+		"taker_price":            cfg.displayPrice(price),
+		"taker_price_buffer_bps": cfg.bufferBPS,
+		"taker_book_bid":         snapshot.Bid,
+		"taker_book_ask":         snapshot.Ask,
+		"taker_book_received_at": snapshot.ReceivedAt.Format(time.RFC3339Nano),
+		"taker_book_age_ms":      time.Since(snapshot.ReceivedAt).Milliseconds(),
+	}
+	if !snapshot.ExchangeAt.IsZero() {
+		metadata["taker_book_exchange_at"] = snapshot.ExchangeAt.Format(time.RFC3339Nano)
+	}
+	return metadata
 }
 
 func (c dynamicPostOnlyConfig) price(snapshot booktop.Snapshot, side string) float64 {
@@ -199,6 +299,19 @@ func waitForFreshBook(ctx context.Context, tracker *booktop.Tracker, wait time.D
 
 func dynamicPostOnlyPriceMultiplier(venue string, params map[string]any) float64 {
 	if value, ok := params["post_only_price_multiplier"]; ok {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	if venue == "lighter" {
+		return 10
+	}
+	return 1
+}
+
+func dynamicTakerPriceMultiplier(venue string, params map[string]any) float64 {
+	if value, ok := params["taker_price_multiplier"]; ok {
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
 		if err == nil && parsed > 0 {
 			return parsed

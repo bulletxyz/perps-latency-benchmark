@@ -1,8 +1,8 @@
 import type { Sample, SummaryRow } from "@/api/bench"
 import { nsToMs } from "@/lib/format"
 
-const EXTENDED_SPEED_BUMP_NS = 150_000_000
-const EXTENDED_SPEED_BUMP_MS = 150
+const EXTENDED_SPEED_BUMP_NS = 0
+const EXTENDED_SPEED_BUMP_MS = 0
 
 export function confirmP50(row: SummaryRow, subtractNetworkFloor = false) {
   return summaryLatency(
@@ -130,6 +130,9 @@ export function isAccountFeedCancelCleanup(sample: Sample) {
 }
 
 export function summarySpeedBumpMS(row: SummaryRow) {
+  if (isExtendedTaker(row.venue, row.order_type)) {
+    return undefined
+  }
   if (
     row.speed_bump_ms &&
     row.speed_bump_ms > 0 &&
@@ -137,7 +140,7 @@ export function summarySpeedBumpMS(row: SummaryRow) {
   ) {
     return row.speed_bump_ms
   }
-  return isExtendedTaker(row.venue, row.order_type) ? EXTENDED_SPEED_BUMP_MS : undefined
+  return undefined
 }
 
 export function primaryLabel(_venue: string) {
@@ -198,6 +201,9 @@ function adjustedNetworkNS(sample: Sample) {
 }
 
 function effectiveSpeedBumpNS(sample: Sample) {
+  if (isExtendedTaker(sample.venue, sample.order_type)) {
+    return EXTENDED_SPEED_BUMP_NS
+  }
   if (
     sample.speed_bump_ns &&
     sample.speed_bump_ns > 0 &&
@@ -205,7 +211,7 @@ function effectiveSpeedBumpNS(sample: Sample) {
   ) {
     return sample.speed_bump_ns
   }
-  return isExtendedTaker(sample.venue, sample.order_type) ? EXTENDED_SPEED_BUMP_NS : 0
+  return 0
 }
 
 function isExtendedTaker(venue: string, orderType?: string) {

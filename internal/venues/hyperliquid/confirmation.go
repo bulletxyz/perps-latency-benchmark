@@ -1,15 +1,20 @@
 package hyperliquid
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"perps-latency-benchmark/internal/accountfeed"
 	"perps-latency-benchmark/internal/bench"
 	"perps-latency-benchmark/internal/confirmws"
+	"perps-latency-benchmark/internal/netlatency"
 	"perps-latency-benchmark/internal/payload"
 	"perps-latency-benchmark/internal/venues/confirmutil"
 )
@@ -52,8 +57,82 @@ func ConfirmCancelWebSocket(ctx context.Context, built payload.Built) (*bench.Co
 				},
 			},
 			Match: matchHyperliquidCancelConfirmation,
+			Verify: func(ctx context.Context, submission netlatency.Result, ids map[string]struct{}) (netlatency.Result, bool, error) {
+				return verifyHyperliquidCancelByOpenOrders(ctx, plan.WSURL, user, ids)
+			},
 		}, nil
 	})
+}
+
+func verifyHyperliquidCancelByOpenOrders(ctx context.Context, wsURL string, user string, cloids map[string]struct{}) (netlatency.Result, bool, error) {
+	start := time.Now()
+	open, bytesRead, err := fetchHyperliquidOpenCloids(ctx, hyperliquidAPIBaseURL(wsURL), user)
+	result := netlatency.Result{
+		BytesRead: bytesRead,
+		Trace: netlatency.Trace{
+			StartedAt: start.UTC(),
+			TotalNS:   time.Since(start).Nanoseconds(),
+			Transport: "http_state_poll",
+		},
+	}
+	if err != nil {
+		return result, false, err
+	}
+	for cloid := range cloids {
+		if _, ok := open[cloid]; ok {
+			return result, false, nil
+		}
+	}
+	return result, true, nil
+}
+
+func fetchHyperliquidOpenCloids(ctx context.Context, baseURL string, user string) (map[string]struct{}, int64, error) {
+	body, err := json.Marshal(map[string]any{"type": "openOrders", "user": user})
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/info", bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	bytesRead := int64(len(respBody))
+	if readErr != nil {
+		return nil, bytesRead, readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, bytesRead, fmt.Errorf("hyperliquid openOrders status %d", resp.StatusCode)
+	}
+	var orders []map[string]any
+	if err := json.Unmarshal(respBody, &orders); err != nil {
+		return nil, bytesRead, err
+	}
+	cloids := make(map[string]struct{})
+	for _, order := range orders {
+		cloid := confirmutil.Text(order["cloid"])
+		if cloid != "" {
+			cloids[cloid] = struct{}{}
+		}
+	}
+	return cloids, bytesRead, nil
+}
+
+func hyperliquidAPIBaseURL(wsURL string) string {
+	parsed, err := url.Parse(wsURL)
+	if err != nil || parsed.Host == "" {
+		return DefaultBaseURL
+	}
+	scheme := "https"
+	if parsed.Scheme == "ws" {
+		scheme = "http"
+	}
+	return scheme + "://" + parsed.Host
 }
 
 func dialOrderUpdates(ctx context.Context, wsURL string, user string) (*confirmws.Client, error) {

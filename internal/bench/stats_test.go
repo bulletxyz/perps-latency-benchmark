@@ -49,10 +49,10 @@ func TestLatencyForSampleCentralizesAdjustments(t *testing.T) {
 	}
 
 	latency := LatencyForSample(sample)
-	if latency.SpeedBumpNS != ExtendedSpeedBumpNS || latency.ConfirmationNS != 150_000_000 {
+	if latency.SpeedBumpNS != 0 || latency.ConfirmationNS != 300_000_000 {
 		t.Fatalf("confirmation latency = %#v", latency)
 	}
-	if latency.NetworkAdjustedNS != 130_000_000 {
+	if latency.NetworkAdjustedNS != 280_000_000 {
 		t.Fatalf("network adjusted latency = %#v", latency)
 	}
 	if !latency.HasCancel || latency.CancelNS != 90_000_000 || latency.NetworkAdjustedCleanupNS != 70_000_000 {
@@ -60,7 +60,7 @@ func TestLatencyForSampleCentralizesAdjustments(t *testing.T) {
 	}
 }
 
-func TestSummarizeAppliesExtendedSpeedBumpFallback(t *testing.T) {
+func TestSummarizeDoesNotApplyExtendedSpeedBumpFallback(t *testing.T) {
 	summary := Summarize([]Sample{
 		{
 			Venue:             "extended",
@@ -73,16 +73,16 @@ func TestSummarizeAppliesExtendedSpeedBumpFallback(t *testing.T) {
 		},
 	})
 
-	if summary.P50MS < 149.9 || summary.P50MS > 150.1 {
-		t.Fatalf("adjusted p50 = %f", summary.P50MS)
+	if summary.P50MS < 299.5 || summary.P50MS > 300.5 {
+		t.Fatalf("p50 = %f", summary.P50MS)
 	}
 	if summary.RawP50MS < 299.5 || summary.RawP50MS > 300.5 {
 		t.Fatalf("raw p50 = %f", summary.RawP50MS)
 	}
-	if summary.SpeedBumpMeanMS != 150 {
+	if summary.SpeedBumpMeanMS != 0 {
 		t.Fatalf("speed bump mean = %f", summary.SpeedBumpMeanMS)
 	}
-	if summary.SpeedBumpSource != ExtendedSpeedBumpSource {
+	if summary.SpeedBumpSource != "" {
 		t.Fatalf("speed bump source = %q", summary.SpeedBumpSource)
 	}
 }

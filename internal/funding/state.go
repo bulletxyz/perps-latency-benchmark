@@ -107,6 +107,18 @@ func RecordResult(state *State, plan DepositPlan, result DepositResult, err erro
 	state.Accounts[plan.Account.Name] = account
 }
 
+func RecordAccountObservation(state *State, account AccountConfig, balance bench.BalanceSnapshot, status string, detail string, now time.Time) {
+	if state.Accounts == nil {
+		state.Accounts = map[string]AccountState{}
+	}
+	record := state.Accounts[account.Name]
+	record.LastStatus = status
+	record.LastBalance = balance.BalanceUSD
+	record.LastError = detail
+	record.Metadata = balanceObservationMetadata(balance, now)
+	state.Accounts[account.Name] = record
+}
+
 func RecordAccountError(state *State, account AccountConfig, balance bench.BalanceSnapshot, now time.Time, err error) {
 	if state.Accounts == nil {
 		state.Accounts = map[string]AccountState{}
@@ -123,6 +135,26 @@ func RecordAccountError(state *State, account AccountConfig, balance bench.Balan
 		record.Metadata = map[string]any{"observed_at": now.UTC().Format(time.RFC3339)}
 	}
 	state.Accounts[account.Name] = record
+}
+
+func balanceObservationMetadata(balance bench.BalanceSnapshot, now time.Time) map[string]any {
+	metadata := map[string]any{}
+	for key, value := range balance.Metadata {
+		metadata[key] = value
+	}
+	if value := FundingBalanceUSD(balance); value != balance.BalanceUSD {
+		metadata["funding_balance_usd"] = value
+	}
+	if !balance.CapturedAt.IsZero() {
+		metadata["balance_captured_at"] = balance.CapturedAt.UTC().Format(time.RFC3339)
+	}
+	if !now.IsZero() {
+		metadata["observed_at"] = now.UTC().Format(time.RFC3339)
+	}
+	if len(balance.Positions) > 0 {
+		metadata["positions"] = balance.Positions
+	}
+	return metadata
 }
 
 func DailySpent(state State, now time.Time) float64 {

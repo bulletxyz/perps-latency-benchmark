@@ -196,6 +196,19 @@ go run ./cmd/perps-bench service-topology \
   --listen 127.0.0.1:8080
 ```
 
+Check a supervised deployment for failed services and stale accepted samples:
+
+```bash
+python3 scripts/service_watchdog.py --store data/bench.db
+```
+
+For transient venue/API outages that trip systemd start limits, operators can
+explicitly reset and start failed benchmark services:
+
+```bash
+python3 scripts/service_watchdog.py --store data/bench.db --restart-failed
+```
+
 Expose it publicly with a password:
 
 ```bash

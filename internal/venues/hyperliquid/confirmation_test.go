@@ -1,6 +1,10 @@
 package hyperliquid
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -105,5 +109,57 @@ func TestMatchHyperliquidCancelConfirmationWaitsForAllOrders(t *testing.T) {
 	}, remaining)
 	if !second {
 		t.Fatalf("expected all cancels confirmed, remaining = %#v", remaining)
+	}
+}
+
+func TestHyperliquidAPIBaseURLFromWebSocketURL(t *testing.T) {
+	if got := hyperliquidAPIBaseURL("wss://api.hyperliquid.xyz/ws"); got != "https://api.hyperliquid.xyz" {
+		t.Fatalf("hyperliquidAPIBaseURL() = %q", got)
+	}
+	if got := hyperliquidAPIBaseURL("ws://127.0.0.1:8080/ws"); got != "http://127.0.0.1:8080" {
+		t.Fatalf("hyperliquidAPIBaseURL() = %q", got)
+	}
+}
+
+func TestVerifyHyperliquidCancelByOpenOrdersAcceptsMissingCloids(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/info" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["type"] != "openOrders" || body["user"] != "0xabc" {
+			t.Fatalf("unexpected body %#v", body)
+		}
+		_, _ = w.Write([]byte(`[{"cloid":"0xopen"}]`))
+	}))
+	defer server.Close()
+
+	result, ok, err := verifyHyperliquidCancelByOpenOrders(context.Background(), "ws"+server.URL[len("http"):]+"/ws", "0xabc", map[string]struct{}{"0xcanceled": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("verification ok = false, want true")
+	}
+	if result.Trace.Transport != "http_state_poll" || result.BytesRead == 0 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestVerifyHyperliquidCancelByOpenOrdersRejectsRemainingCloids(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"cloid":"0xopen"}]`))
+	}))
+	defer server.Close()
+
+	_, ok, err := verifyHyperliquidCancelByOpenOrders(context.Background(), "ws"+server.URL[len("http"):]+"/ws", "0xabc", map[string]struct{}{"0xopen": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("verification ok = true, want false")
 	}
 }

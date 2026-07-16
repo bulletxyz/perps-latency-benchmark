@@ -62,7 +62,10 @@ def build(req: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, or
 def before_run(params: dict[str, Any], builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str, order_request_to_order_wire: Any, order_wires_to_order_action: Any, sign_l1_action: Any, Cloid: Any) -> dict[str, Any]:
     position = position_snapshot(builder_params, Account, Info, MAINNET_API_URL)
     planned = planned_orders(params, builder_params, Cloid)
-    open_orders = open_cleanup_orders(planned, builder_params, Account, Info, MAINNET_API_URL)
+    if bool(builder_params.get("cleanup_all_open_orders")):
+        open_orders = active_symbol_orders(builder_params, Account, Info, MAINNET_API_URL)
+    else:
+        open_orders = open_cleanup_orders(planned, builder_params, Account, Info, MAINNET_API_URL)
     if not open_orders:
         repair = neutralize_preexisting_position_payload(
             params,
@@ -265,6 +268,20 @@ def open_cleanup_orders(refs: list[dict[str, Any]], builder_params: dict[str, An
     info = Info(builder_params.get("base_url", MAINNET_API_URL), skip_ws=True)
     open_cloids = {str(order.get("cloid")) for order in info.open_orders(wallet.address) if order.get("cloid")}
     return [ref for ref in refs if str(ref.get("cloid")) in open_cloids]
+
+
+def active_symbol_orders(builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str) -> list[dict[str, Any]]:
+    wallet = Account.from_key(env_or_param(builder_params, "secret_key", "HYPERLIQUID_SECRET_KEY"))
+    info = Info(builder_params.get("base_url", MAINNET_API_URL), skip_ws=True)
+    symbol = str(builder_params.get("symbol", "BTC"))
+    asset = int(builder_params["asset"])
+    refs = []
+    for order in info.open_orders(wallet.address):
+        cloid = order.get("cloid")
+        if not cloid or str(order.get("coin")) != symbol:
+            continue
+        refs.append({"venue": "hyperliquid", "asset": asset, "coin": symbol, "cloid": str(cloid)})
+    return refs
 
 
 def position_snapshot(builder_params: dict[str, Any], Account: Any, Info: Any, MAINNET_API_URL: str) -> list[dict[str, str]]:

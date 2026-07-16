@@ -51,7 +51,8 @@
         "price": "75000",
         "new_order_resp_type": "ACK",
         "neutralize_slippage_bps": "100",
-        "cleanup_all_open_orders": true
+        "cleanup_all_open_orders": true,
+        "neutralize_preexisting_position": true
       }
     }
   }

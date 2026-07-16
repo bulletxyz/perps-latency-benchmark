@@ -1,8 +1,11 @@
 package lighter
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -19,6 +22,54 @@ func TestMatchLighterConfirmationByTradeClientID(t *testing.T) {
 	}
 	if !matched {
 		t.Fatal("expected trade client id match")
+	}
+}
+
+func TestLighterAPIBaseURLFromWebSocketURL(t *testing.T) {
+	if got := lighterAPIBaseURL("wss://mainnet.zklighter.elliot.ai/stream"); got != "https://mainnet.zklighter.elliot.ai" {
+		t.Fatalf("lighterAPIBaseURL() = %q", got)
+	}
+	if got := lighterAPIBaseURL("ws://127.0.0.1:8080/stream"); got != "http://127.0.0.1:8080" {
+		t.Fatalf("lighterAPIBaseURL() = %q", got)
+	}
+}
+
+func TestVerifyLighterCancelByActiveOrdersAcceptsMissingOrders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/accountActiveOrders" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("auth") != "token" || r.URL.Query().Get("account_index") != "123" || r.URL.Query().Get("market_id") != "1" {
+			t.Fatalf("unexpected query %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"orders":[{"client_order_index":456}]}`))
+	}))
+	defer server.Close()
+
+	result, ok, err := verifyLighterCancelByActiveOrders(context.Background(), "ws"+server.URL[len("http"):]+"/stream", "token", "123", "1", map[string]struct{}{"789": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("verification ok = false, want true")
+	}
+	if result.Trace.Transport != "http_state_poll" || result.BytesRead == 0 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestVerifyLighterCancelByActiveOrdersRejectsRemainingOrders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"orders":[{"client_order_index":456}]}`))
+	}))
+	defer server.Close()
+
+	_, ok, err := verifyLighterCancelByActiveOrders(context.Background(), "ws"+server.URL[len("http"):]+"/stream", "token", "123", "1", map[string]struct{}{"456": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("verification ok = true, want false")
 	}
 }
 

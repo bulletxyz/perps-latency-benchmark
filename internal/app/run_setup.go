@@ -101,7 +101,15 @@ func buildRunResources(ctx context.Context, venueName string, cfg fileConfig, ru
 		resources.NetworkBaseline, resources.NetworkBaselineCancel = buildNetworkBaseline(ctx, runtime, cfg)
 	}
 	var builderHook prebuiltBuilderHook
-	if resources.Definition.Name != "" && dynamicPostOnlyPricingEnabled(resources.Runtime.Params) {
+	if resources.Definition.Name != "" && dynamicTakerPricingEnabled(resources.Runtime.Params) {
+		tracker, cancel := startBookTracker(ctx, resources.Definition, resources.Runtime)
+		if tracker == nil {
+			resources.CloseBackground()
+			return nil, dynamicTakerBookUnavailable(resources.Definition.Name)
+		}
+		resources.BookCancel = cancel
+		builderHook = dynamicTakerPriceHook(resources.Definition.Name, resources.Runtime.Params, tracker)
+	} else if resources.Definition.Name != "" && dynamicPostOnlyPricingEnabled(resources.Runtime.Params) {
 		if dynamicPostOnlyHTTPPricingEnabled(resources.Definition.Name, resources.Runtime.Params) {
 			builderHook = dynamicPostOnlyHTTPPriceHook(resources.Definition.Name, resources.Runtime.Params, resources.Definition, resources.Runtime)
 		} else {

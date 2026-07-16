@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"perps-latency-benchmark/internal/booktop"
 	"perps-latency-benchmark/internal/payload"
 	"perps-latency-benchmark/internal/venues/hyperliquid"
 	"perps-latency-benchmark/internal/venues/nado"
@@ -124,5 +126,49 @@ func TestDynamicPostOnlyHTTPPriceHookUsesNadoMarketPrice(t *testing.T) {
 	}
 	if metadata["post_only_price_source"] != "nado_market_price_http" {
 		t.Fatalf("metadata source = %v", metadata["post_only_price_source"])
+	}
+}
+
+func TestDynamicTakerConfigCrossesBookWithBuffer(t *testing.T) {
+	snapshot := booktop.Snapshot{
+		Bid:        100,
+		Ask:        101,
+		ReceivedAt: time.Now().UTC(),
+	}
+	cfg := newDynamicTakerConfig("extended", map[string]any{
+		"taker_price_buffer_bps": 150,
+		"taker_price_tick":       1,
+	})
+
+	if got := cfg.paramPrice(cfg.price(snapshot, "buy")); got != "103" {
+		t.Fatalf("buy price = %v", got)
+	}
+	if got := cfg.paramPrice(cfg.price(snapshot, "sell")); got != "98" {
+		t.Fatalf("sell price = %v", got)
+	}
+}
+
+func TestDynamicTakerMetadata(t *testing.T) {
+	receivedAt := time.Now().UTC()
+	snapshot := booktop.Snapshot{
+		Bid:        67000,
+		Ask:        67001,
+		ReceivedAt: receivedAt,
+	}
+	cfg := newDynamicTakerConfig("extended", map[string]any{
+		"taker_price_buffer_bps": 150,
+		"taker_price_tick":       1,
+	})
+
+	metadata := dynamicTakerMetadata(cfg, "book_top", cfg.price(snapshot, "buy"), snapshot)
+
+	if metadata["taker_price_source"] != "book_top" {
+		t.Fatalf("source = %v", metadata["taker_price_source"])
+	}
+	if metadata["taker_price"] != "68007" {
+		t.Fatalf("price = %v", metadata["taker_price"])
+	}
+	if metadata["taker_book_bid"] != float64(67000) || metadata["taker_book_ask"] != float64(67001) {
+		t.Fatalf("book metadata = %#v", metadata)
 	}
 }

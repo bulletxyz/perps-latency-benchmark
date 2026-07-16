@@ -157,8 +157,8 @@ class ExtendedPayloadHelpersTest(unittest.TestCase):
         )
 
         self.assertEqual(built["metadata"]["order_type"], "market")
-        self.assertEqual(built["metadata"]["speed_bump_ms"], 150)
-        self.assertEqual(built["metadata"]["speed_bump_ns"], 150_000_000)
+        self.assertEqual(built["metadata"]["speed_bump_ms"], 0)
+        self.assertEqual(built["metadata"]["speed_bump_ns"], 0)
 
 
 if __name__ == "__main__":

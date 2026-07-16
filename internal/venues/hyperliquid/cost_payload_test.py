@@ -18,6 +18,8 @@ class BalanceSnapshotTest(unittest.TestCase):
         self.assertEqual(got["balance_usd"], 85.123)
         self.assertEqual(got["metadata"]["balance_source"], "spotClearinghouseState.USDC.total")
         self.assertEqual(got["metadata"]["clearinghouse_account_value"], "0.0")
+        self.assertEqual(got["metadata"]["free_collateral_usd"], "0.0")
+        self.assertEqual(got["metadata"]["locked_collateral_usd"], "0.0")
 
     def test_auto_uses_clearinghouse_when_account_value_exists(self):
         got = cost_payload.balance_snapshot_from_states(
@@ -31,6 +33,7 @@ class BalanceSnapshotTest(unittest.TestCase):
 
         self.assertEqual(got["balance_usd"], 42.5)
         self.assertEqual(got["metadata"]["balance_source"], "clearinghouseState.marginSummary.accountValue")
+        self.assertEqual(got["metadata"]["free_collateral_usd"], "42.5")
 
 
 class FillAggregationTest(unittest.TestCase):

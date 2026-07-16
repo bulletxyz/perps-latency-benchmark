@@ -207,6 +207,8 @@ def balance_snapshot_from_states(state: dict[str, Any], spot_state: dict[str, An
     spot_usdc = spot_balance(spot_state, "USDC")
     spot_total = number(spot_usdc.get("total"))
     spot_hold = number(spot_usdc.get("hold"))
+    withdrawable = number(state.get("withdrawable"))
+    locked_collateral = spot_hold
     unrealized = Decimal("0")
     for wrapped in state.get("assetPositions") or []:
         position = dict(wrapped.get("position") or {})
@@ -237,6 +239,8 @@ def balance_snapshot_from_states(state: dict[str, Any], spot_state: dict[str, An
             "spot_usdc_total": str(spot_total),
             "spot_usdc_hold": str(spot_hold),
             "withdrawable": str(state.get("withdrawable") or ""),
+            "free_collateral_usd": str(withdrawable),
+            "locked_collateral_usd": str(locked_collateral),
             "total_ntl_pos": str(margin.get("totalNtlPos") or ""),
             "time": state.get("time") or spot_state.get("time"),
         },

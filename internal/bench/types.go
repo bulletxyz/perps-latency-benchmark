@@ -76,8 +76,9 @@ type PreparedRequest struct {
 }
 
 type Confirmation struct {
-	Wait  func(context.Context, netlatency.Result) (netlatency.Result, error)
-	Close func() error
+	Wait   func(context.Context, netlatency.Result) (netlatency.Result, error)
+	Verify func(context.Context, netlatency.Result) (netlatency.Result, bool, error)
+	Close  func() error
 }
 
 type Venue interface {

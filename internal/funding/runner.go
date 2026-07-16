@@ -43,8 +43,14 @@ func (r *Runner) RunOnce(ctx context.Context, now time.Time) ([]DepositResult, e
 		}
 		decision := PlanDeposit(cfg, account, balance, r.State.Accounts[account.Name], now)
 		if decision.Plan == nil {
+			RecordAccountObservation(&r.State, account, balance, "skipped", decision.Skipped, now)
 			if r.Out != nil {
-				fmt.Fprintf(r.Out, "%s funding skipped: %s balance=%.6f min=%.6f\n", account.Name, decision.Skipped, balance.BalanceUSD, account.MinBalanceUSD)
+				fundingBalance := FundingBalanceUSD(balance)
+				if fundingBalance != balance.BalanceUSD {
+					fmt.Fprintf(r.Out, "%s funding skipped: %s balance=%.6f funding_balance=%.6f min=%.6f\n", account.Name, decision.Skipped, balance.BalanceUSD, fundingBalance, account.MinBalanceUSD)
+				} else {
+					fmt.Fprintf(r.Out, "%s funding skipped: %s balance=%.6f min=%.6f\n", account.Name, decision.Skipped, balance.BalanceUSD, account.MinBalanceUSD)
+				}
 			}
 			continue
 		}

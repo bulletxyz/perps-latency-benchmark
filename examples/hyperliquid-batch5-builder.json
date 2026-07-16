@@ -59,6 +59,7 @@
         "post_only_price_offset_bps": 500,
         "post_only_price_refresh_ms": 300000,
         "price_step": "10",
+        "cleanup_all_open_orders": true,
         "tif": "Alo"
       }
     }

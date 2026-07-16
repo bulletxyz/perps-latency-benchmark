@@ -42,6 +42,24 @@ func TestWebSocketCapableLiveExamplesPreferWebSocketSubmission(t *testing.T) {
 	}
 }
 
+func TestExtendedTakerExampleUsesDynamicBookPrice(t *testing.T) {
+	cfg, err := loadFileConfig(filepath.Join("..", "..", "examples", "extended-taker-builder.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := cfg.Request.Builder.Params
+
+	if got := params["taker_price_source"]; got != "book_top" {
+		t.Fatalf("taker_price_source = %v", got)
+	}
+	if got := params["taker_price_buffer_bps"]; got == nil {
+		t.Fatal("missing taker_price_buffer_bps")
+	}
+	if dynamicTakerPricingEnabled(params) != true {
+		t.Fatalf("dynamic taker pricing not enabled for params %#v", params)
+	}
+}
+
 func TestRunMockCommand(t *testing.T) {
 	var stdout bytes.Buffer
 

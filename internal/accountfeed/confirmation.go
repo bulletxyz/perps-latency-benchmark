@@ -23,11 +23,14 @@ type CancelConfirmationBinding struct {
 	FeedKey string
 	Options FeedOptions
 	Match   CancelMatcher
+	Verify  CancelVerifier
 }
 
 type ConfirmationBuilder func(Plan) (ConfirmationBinding, error)
 
 type CancelConfirmationBuilder func(Plan) (CancelConfirmationBinding, error)
+
+type CancelVerifier func(context.Context, netlatency.Result, map[string]struct{}) (netlatency.Result, bool, error)
 
 func NewConfirmation(ctx context.Context, built payload.Built, planOptions PlanOptions, build ConfirmationBuilder) (*bench.Confirmation, error) {
 	plan, ok, err := DecodePlan(built, planOptions)
@@ -62,7 +65,7 @@ func NewCancelConfirmation(ctx context.Context, built payload.Built, planOptions
 	if binding.FeedKey == "" || binding.Match == nil {
 		return nil, nil
 	}
-	return NewPersistentCancelConfirmation(ctx, FeedFromContext(ctx, binding.FeedKey), binding.Options, plan.IDs, binding.Match)
+	return NewPersistentCancelConfirmationWithVerifier(ctx, FeedFromContext(ctx, binding.FeedKey), binding.Options, plan.IDs, binding.Match, binding.Verify)
 }
 
 func NewPersistentConfirmation(ctx context.Context, feed *Feed, opts FeedOptions, match Matcher) (*bench.Confirmation, error) {
@@ -80,8 +83,19 @@ func NewPersistentConfirmation(ctx context.Context, feed *Feed, opts FeedOptions
 }
 
 func NewPersistentCancelConfirmation(ctx context.Context, feed *Feed, opts FeedOptions, ids map[string]struct{}, match CancelMatcher) (*bench.Confirmation, error) {
+	return NewPersistentCancelConfirmationWithVerifier(ctx, feed, opts, ids, match, nil)
+}
+
+func NewPersistentCancelConfirmationWithVerifier(ctx context.Context, feed *Feed, opts FeedOptions, ids map[string]struct{}, match CancelMatcher, verify CancelVerifier) (*bench.Confirmation, error) {
 	remaining := confirmutil.CopyIDSet(ids)
-	return NewPersistentConfirmation(ctx, feed, opts, func(msg map[string]any) (bool, error) {
+	confirmation, err := NewPersistentConfirmation(ctx, feed, opts, func(msg map[string]any) (bool, error) {
 		return match(msg, remaining), nil
 	})
+	if err != nil || confirmation == nil || verify == nil {
+		return confirmation, err
+	}
+	confirmation.Verify = func(ctx context.Context, submission netlatency.Result) (netlatency.Result, bool, error) {
+		return verify(ctx, submission, confirmutil.CopyIDSet(ids))
+	}
+	return confirmation, nil
 }

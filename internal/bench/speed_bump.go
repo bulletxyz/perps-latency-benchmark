@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	ExtendedSpeedBumpNS     int64 = 150_000_000
-	ExtendedSpeedBumpSource       = "Extended documents a 150 ms taker order-entry speed bump"
+	ExtendedSpeedBumpNS     int64 = 0
+	ExtendedSpeedBumpSource       = ""
 )
 
 func speedBumpFromMetadata(metadata map[string]any) (int64, string) {
@@ -53,23 +53,23 @@ func NetworkAdjustedNetworkNS(sample Sample) (int64, bool) {
 }
 
 func SpeedBumpNS(sample Sample) int64 {
-	if sample.SpeedBumpNS > 0 && !isExtendedNonTaker(sample) {
-		return sample.SpeedBumpNS
-	}
 	if isExtendedTaker(sample) {
 		return ExtendedSpeedBumpNS
+	}
+	if sample.SpeedBumpNS > 0 && !isExtendedNonTaker(sample) {
+		return sample.SpeedBumpNS
 	}
 	return 0
 }
 
 func SpeedBumpSource(sample Sample) string {
+	if isExtendedTaker(sample) {
+		return ExtendedSpeedBumpSource
+	}
 	if sample.SpeedBumpNS > 0 && !isExtendedNonTaker(sample) {
 		if source := strings.TrimSpace(sample.SpeedBumpSource); source != "" {
 			return source
 		}
-	}
-	if isExtendedTaker(sample) {
-		return ExtendedSpeedBumpSource
 	}
 	return strings.TrimSpace(sample.SpeedBumpSource)
 }

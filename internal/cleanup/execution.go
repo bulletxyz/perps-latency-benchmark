@@ -85,6 +85,31 @@ func (e cleanupExecution) resultFromNetworkWithConfirmation(ctx context.Context,
 		cleanup.BytesRead = confirmed.BytesRead
 	}
 	if confirmErr != nil {
+		if confirmation.Verify != nil {
+			verifyCtx, verifyCancel := context.WithTimeout(ctx, timeout)
+			verified, ok, verifyErr := confirmation.Verify(verifyCtx, result)
+			verifyCancel()
+			if verified.Trace.TotalNS > 0 {
+				cleanup.DurationNS = verified.Trace.TotalNS
+				cleanup.SentAt = verified.Trace.StartedAt.UTC()
+				cleanup.Trace = verified.Trace
+				cleanup.BytesRead = verified.BytesRead
+			}
+			if verifyErr == nil && ok {
+				if cleanup.Metadata == nil {
+					cleanup.Metadata = map[string]any{}
+				}
+				cleanup.Metadata[bench.CleanupConfirmationMetadataKey] = "state_poll"
+				cleanup.Metadata[bench.CleanupConfirmationTransportMetadataKey] = verified.Trace.Transport
+				cleanup.Metadata["cleanup_confirmation_fallback_error"] = confirmErr.Error()
+				return cleanup
+			}
+			if verifyErr != nil {
+				cleanup.OK = false
+				cleanup.Error = fmt.Sprintf("cancel confirmation: %v; state verification: %v", confirmErr, verifyErr)
+				return cleanup
+			}
+		}
 		cleanup.OK = false
 		cleanup.Error = fmt.Sprintf("cancel confirmation: %v", confirmErr)
 		return cleanup

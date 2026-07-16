@@ -13,6 +13,7 @@ class FakeAsterClient:
         self.orders = open_orders or []
         self.base_url = "https://fapi.asterdex.com"
         self.signer = self
+        self.submitted_bodies = []
 
     def position_snapshot(self, _symbol):
         return self.positions
@@ -32,6 +33,20 @@ class FakeAsterClient:
 
     def cancel_confirmation(self, refs):
         return {"venue": "aster", "client_order_ids": [ref["client_order_id"] for ref in refs]}
+
+    def market_order_body(self, symbol, side, quantity, client_order_id=None):
+        return self.sign({
+            "symbol": symbol,
+            "side": side,
+            "quantity": str(quantity),
+            "newClientOrderId": client_order_id or "pb_neutralize_test",
+            "reduceOnly": "true",
+        })
+
+    def submit_order_body(self, body):
+        self.submitted_bodies.append(body)
+        self.positions = []
+        return 200, {"status": "OK"}
 
 
 class AsterCleanupHelpersTest(unittest.TestCase):
@@ -81,6 +96,31 @@ class AsterCleanupHelpersTest(unittest.TestCase):
 
         self.assertFalse(got["cleanup"]["ok"])
         self.assertIn("existing position", got["cleanup"]["description"])
+
+    def test_before_run_self_heals_existing_taker_position_when_opted_in(self):
+        client = FakeAsterClient([
+            {"symbol": "BTCUSDT", "position_side": "BOTH", "position_amt": "0.001"},
+        ])
+
+        got = cancel_payload.before_run(
+            client,
+            {"run": {"run_id": "run-a"}},
+            {
+                "symbol": "BTCUSDT",
+                "neutralize_on_fill": True,
+                "neutralize_preexisting_position": True,
+                "cleanup_all_open_orders": True,
+                "position_reconciliation_poll_attempts": 1,
+            },
+        )
+
+        self.assertTrue(got["cleanup"]["ok"])
+        self.assertEqual(got["cleanup"]["metadata"]["cleanup"], "neutralize_position")
+        self.assertTrue(got["cleanup"]["metadata"]["self_heal_position"])
+        self.assertTrue(got["cleanup"]["metadata"]["restart_before_measurement"])
+        self.assertEqual(got["cleanup"]["metadata"]["position_after"], [])
+        self.assertEqual(len(client.submitted_bodies), 1)
+        self.assertIn('"side":"SELL"', client.submitted_bodies[0])
 
     def test_before_run_allows_flat_taker_account(self):
         got = cancel_payload.before_run(
