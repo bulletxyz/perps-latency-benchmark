@@ -70,6 +70,15 @@ export async function clientFor(params) {
   return clients.get(key);
 }
 
+let requestCounter = 0;
+
+// A plain Number, not a BigInt: this value is JSON-serialized into the frame and
+// JSON.stringify throws on BigInt. A per-process counter cannot approach 2**53.
+export function nextRequestID() {
+  requestCounter += 1;
+  return requestCounter;
+}
+
 export function clientOrderId(params, req, offset) {
   const explicit = params.client_order_id;
   if (explicit !== undefined && explicit !== null && offset === 0) {
@@ -139,7 +148,10 @@ export async function build(req) {
     .build(client)
     .toBase64();
 
-  const requestID = Number(req.iteration ?? 0) + 1;
+  // Correlation id only, and it must be a valid u64: warmup iterations are
+  // NEGATIVE (-warmups..-1), so deriving it from `iteration` sent id:-1 on the
+  // first warmup and Bullet rejected the frame with "failed to parse message".
+  const requestID = nextRequestID();
   const wsBody = JSON.stringify({ method: "order.place", id: requestID, params: { tx } });
   const httpBody = JSON.stringify({ body: tx });
 

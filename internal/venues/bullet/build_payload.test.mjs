@@ -53,3 +53,20 @@ test("batch price ladder steps away from the spread on both sides", () => {
 test("price_step_bps is applied relative to price", () => {
   assert.equal(priceForOffset({ price: "50000", price_step_bps: "10", side: "bid" }, 1), "49950");
 });
+
+test("websocket request id is a positive u64 even for negative warmup iterations", async () => {
+  // Warmup iterations are negative (-warmups..-1). Deriving the correlation id
+  // from `iteration` produced id:-1 on the first warmup, which Bullet rejected
+  // as unparseable because the field is a u64.
+  const { nextRequestID } = await import("./build_payload.mjs");
+  const seen = [];
+  for (let i = 0; i < 5; i++) seen.push(nextRequestID());
+  for (const id of seen) {
+    assert.equal(typeof id, "number", "must be JSON-serializable; JSON.stringify throws on BigInt");
+    assert.ok(Number.isInteger(id) && id > 0, `request id ${id} must be a positive integer`);
+    assert.ok(id < Number.MAX_SAFE_INTEGER, `request id ${id} must stay exactly representable`);
+  }
+  // The frame is JSON-serialized, so prove the id survives it.
+  assert.equal(JSON.parse(JSON.stringify({ id: seen[0] })).id, seen[0]);
+  assert.equal(new Set(seen.map(String)).size, seen.length, "ids must be distinct");
+});
