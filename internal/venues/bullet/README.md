@@ -92,9 +92,12 @@ stays visible in the data.
 
 ## Transports
 
-Both are supported and configured: WebSocket (`bullet-builder.json`) and HTTPS
-`POST /tx/submit` (`bullet-http-builder.json`), carrying the identical signed
-transaction. WebSocket is the faster path.
+Only WebSocket configs ship. HTTP `POST /tx/submit` is supported by the venue
+definition and handled by the classifier — it carries the identical signed
+transaction — but no example config uses it, because WebSocket is roughly twice
+as fast and is the path every comparable venue is benchmarked on. To measure the
+HTTP path, copy a WebSocket config, set `"transport": "https"`, and add
+`request.url` pointing at `<host>/tx/submit`.
 
 ## Other constraints
 
