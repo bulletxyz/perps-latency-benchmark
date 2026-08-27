@@ -327,9 +327,7 @@ network floor" toggle to inspect the optional network-adjusted view.
   post-only pricing, cleanup by client order id, and account-feed confirmation.
   Batch orders are placed in one transaction under a single signature, so batch
   latency is not directly comparable with venues that sign each batch action
-  individually. The taker config (`bullet-taker-builder.json`) cannot currently
-  run: its fill-likely order profile trips the risk gate pending
-  position-neutralization support for Bullet.
+  individually.
 
 ## Troubleshooting
 

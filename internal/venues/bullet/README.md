@@ -111,15 +111,14 @@ HTTP path, copy a WebSocket config, set `"transport": "https"`, and add
   the encoding Bullet accepts; `/api/v1/delegateOf` rejects the hex form of the
   same bytes.
 
-## Taker runs are blocked pending neutralization support
+## No taker config
 
-`bullet-taker-builder.json` uses `immediate_or_cancel`, which
-`lifecycle.FillLikely` correctly reports as fill-likely. That requires
-`risk.allow_fill`, which in turn requires `risk.neutralize_on_fill`, which
-requires a venue that can flatten a position after a fill. `bullet.go` sets no
-`Capabilities.Neutralization` and the builders implement no neutralization, so
-the config fails risk validation by design rather than placing orders it cannot
-unwind. Fix that gap before enabling taker runs.
+Taker configs are not shipped. `immediate_or_cancel` is fill-likely, which
+`lifecycle.FillLikely` correctly gates behind `risk.allow_fill` and in turn
+`risk.neutralize_on_fill` — and Bullet implements no position neutralization,
+so a filled order could not be unwound. `bullet.go` deliberately does not claim
+`Capabilities.Neutralization`. Add neutralization support to the builders
+before adding a taker config.
 
 ## Operational note: `PERPS_BENCH_PYTHON` does not apply here
 
