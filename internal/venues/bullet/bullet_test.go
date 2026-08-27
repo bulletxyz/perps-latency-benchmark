@@ -139,13 +139,27 @@ func TestClassifyHTTPSubmitEnvelope(t *testing.T) {
 	}
 }
 
-// The numeric-status HTTP error shape must not be mistaken for a TxStatus.
-func TestClassifyHTTPErrorCarriesMessage(t *testing.T) {
-	got := Classify(lifecycle.ResponseInput{Body: []byte(`{"status":429,"message":"rate limited"}`)})
-	if got.Status != lifecycle.StatusRejected {
-		t.Fatalf("status = %q, want rejected", got.Status)
+// HTTP status codes must survive into the classification. Decoding past a
+// non-OK generic verdict would collapse 429 into rejected and, for the
+// IP-allowlisted MM ingress, 403 into rejected — hiding exactly the signals an
+// operator needs. Matches how every other venue guards Classify.
+func TestClassifyPreservesHTTPStatusCategory(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+		body string
+		want lifecycle.ClassificationStatus
+	}{
+		{"rate limited", 429, `{"status":429,"message":"rate limited"}`, lifecycle.StatusRateLimited},
+		{"mm ingress not allowlisted", 403, `{"status":403,"message":"forbidden"}`, lifecycle.StatusAuthError},
+		{"bad request", 400, `{"status":400,"message":"Bad request: invalid tx"}`, lifecycle.StatusRejected},
 	}
-	if got.Reason != "rate limited" {
-		t.Fatalf("reason = %q, want the server message", got.Reason)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := Classify(lifecycle.ResponseInput{StatusCode: testCase.code, Body: []byte(testCase.body)})
+			if got.Status != testCase.want {
+				t.Fatalf("status = %q, want %q (reason %q)", got.Status, testCase.want, got.Reason)
+			}
+		})
 	}
 }

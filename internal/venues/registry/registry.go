@@ -58,11 +58,9 @@ func nadoDirectDefinition() spec.Definition {
 // rather than Cloudflare, so it measures the exchange without the proxy hop.
 // The endpoint is IP-allowlisted: it returns HTTP 403 from unlisted addresses.
 func bulletDirectDefinition() spec.Definition {
-	definition := bullet.Definition()
+	definition := bullet.DirectDefinition()
 	definition.Name = "bullet_direct"
 	definition.Aliases = []string{"bullet-direct", "bullet direct", "bullet_mm", "bullet-mm"}
-	definition.DefaultBaseURL = "https://tradingapi-mm.bullet.xyz"
-	definition.DefaultWSURL = "wss://tradingapi-mm.bullet.xyz/ws"
 	definition.Notes = append([]string{
 		"Direct market-maker ingress at wss://tradingapi-mm.bullet.xyz/ws bypasses the public Cloudflare proxy; the host resolves to AWS ap-northeast-1 directly.",
 		"The MM endpoint is IP-allowlisted and returns HTTP 403 from unlisted addresses, so this venue only runs from an allowlisted collector.",

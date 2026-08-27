@@ -14,6 +14,11 @@ import (
 
 const DefaultBaseURL = "https://tradingapi.bullet.xyz"
 const DefaultWSURL = "wss://tradingapi.bullet.xyz/ws"
+
+// Market-maker ingress: resolves straight to the origin rather than through the
+// public Cloudflare proxy. IP-allowlisted.
+const DirectBaseURL = "https://tradingapi-mm.bullet.xyz"
+const DirectWSURL = "wss://tradingapi-mm.bullet.xyz/ws"
 const DefaultHTTPPath = "/tx/submit"
 const WebSocketHeartbeatMessage = `{"method":"ping"}`
 const DocsURL = "https://tradingapi.bullet.xyz/docs/"
@@ -23,12 +28,25 @@ const OrderFieldsDocsURL = "https://tradingapi.bullet.xyz/docs/order-fields.md"
 const DecimalDocsURL = "https://tradingapi.bullet.xyz/docs/decimal-encoding.md"
 
 func Definition() spec.Definition {
+	return definitionFor(DefaultBaseURL, DefaultWSURL)
+}
+
+// DirectDefinition binds every host-derived field to the market-maker ingress,
+// so the book-top and confirmation feeds cannot silently fall back to the public
+// host while orders are submitted over the MM one.
+func DirectDefinition() spec.Definition {
+	return definitionFor(DirectBaseURL, DirectWSURL)
+}
+
+// definitionFor builds a Bullet definition bound to one ingress, so every
+// host-derived field follows the same endpoint.
+func definitionFor(baseURL string, wsURL string) spec.Definition {
 	return spec.Definition{
 		Name:            "bullet",
 		Aliases:         []string{"bullet-xyz", "bullet_xyz", "bulletx"},
-		DefaultBaseURL:  DefaultBaseURL,
+		DefaultBaseURL:  baseURL,
 		DefaultHTTPPath: DefaultHTTPPath,
-		DefaultWSURL:    DefaultWSURL,
+		DefaultWSURL:    wsURL,
 		WSReadInitial:   true,
 		WSHeartbeat: spec.WebSocketHeartbeat{
 			Message:   WebSocketHeartbeatMessage,
@@ -62,7 +80,10 @@ func Definition() spec.Definition {
 		},
 		BookTop: spec.BookTop{
 			Build: func(runtime spec.RuntimeConfig) (booktop.Config, bool) {
-				url := spec.CoalesceURL(runtime.WSURL, DefaultWSURL)
+				// runtime.WSURL first, then this definition's own default. Using the
+				// package const here would point bullet_direct's book-top feed at the
+				// public host while it submits over the MM ingress.
+				url := spec.CoalesceURL(runtime.WSURL, wsURL)
 				symbol := spec.TextParam(runtime.Params, "symbol", "BTC-USD")
 				if url == "" || symbol == "" {
 					return booktop.Config{}, false
@@ -121,7 +142,12 @@ func nodeCommand(script string) []string {
 
 func Classify(in lifecycle.ResponseInput) lifecycle.Classification {
 	generic := lifecycle.ClassifyResponse(in)
-	if in.Err != nil || len(in.Body) == 0 {
+	// Matches the other venues: once the generic pass has already decided the
+	// response is not OK, keep its verdict. Decoding on would collapse a 429 into
+	// rejected rather than rate_limited, and the 403 the MM ingress returns to an
+	// unlisted address into rejected rather than auth_error — which is exactly the
+	// signal an operator needs to see.
+	if in.Err != nil || len(in.Body) == 0 || !generic.OK() {
 		return generic
 	}
 	var decoded struct {

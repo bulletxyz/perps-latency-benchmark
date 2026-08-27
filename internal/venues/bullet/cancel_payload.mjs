@@ -21,15 +21,6 @@ export function cleanupOrdersForVenue(metadata, venue) {
   return (metadata?.cleanup_orders ?? []).filter((order) => order?.venue === venue);
 }
 
-export function resultOrdersForVenue(result, venue) {
-  const refs = [];
-  for (const sample of result?.samples ?? []) {
-    const typed = (sample?.order_refs ?? []).filter((order) => order?.venue === venue);
-    refs.push(...(typed.length ? typed : cleanupOrdersForVenue(sample?.metadata ?? {}, venue)));
-  }
-  return refs;
-}
-
 export function normalizedIDs(refs) {
   const out = [];
   for (const ref of refs) {
@@ -51,13 +42,22 @@ export async function build(req) {
 
   const metadata = params.metadata ?? {};
   let refs = cleanupOrdersForVenue(metadata, "bullet");
-  if (!refs.length) refs = resultOrdersForVenue(params.sample ?? {}, "bullet");
+  // internal/cleanup/command.go supplies refs at params.order_refs; the earlier
+  // fallback read params.sample through resultOrdersForVenue, which expects a
+  // result object with a samples array and so could never match.
+  if (!refs.length) refs = (params.order_refs ?? []).filter((r) => r?.venue === "bullet");
   const ids = normalizedIDs(refs);
   if (!ids.length) return cleanupResult(false, true, "no Bullet cleanup_orders");
 
   const client = await clientFor(builderParams);
   const symbol = String(builderParams.symbol ?? "BTC-USD").toUpperCase();
   const marketId = client.marketId(symbol);
+  // marketId is `number | undefined`, and undefined coerces to 0 across the wasm
+  // boundary — which would sign a valid cancel against market 0, cancel nothing,
+  // and report cleanup success while orders stayed resting.
+  if (marketId === undefined) {
+    return cleanupResult(false, false, `bullet exchangeInfo has no market for symbol ${symbol}`);
+  }
   const cancels = ids.map((id) => new CancelOrderArgs(null, BigInt(id)));
 
   // Uniqueness left to the SDK; see the note in build_payload.mjs. This path

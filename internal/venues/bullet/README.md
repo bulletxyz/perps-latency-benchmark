@@ -39,12 +39,12 @@ Two SDK details worth knowing before editing these files:
 
 ## Mainnet only
 
-This venue ships mainnet configs only. `@bulletxyz/sdk-wasm@0.0.35` fails with
+This venue ships mainnet configs only. `@bulletxyz/sdk-wasm` releases have at times failed with
 `Schema outdated - recompile the binary to update bullet-exchange-interface`
 against testnet, which has been upgraded ahead of mainnet and ahead of the
 pinned SDK. Mainnet is unaffected. If you want a testnet config later, take a
 mainnet one, set `"network": "testnet"` and point `request.ws_url` at the
-testnet host — and expect to need an SDK newer than 0.0.35.
+testnet host — and expect to need an SDK at least as new as the one pinned here.
 
 Worth noting the failure mode: the SDK raises at client construction rather
 than emitting a silently malformed transaction, which is the behaviour you
