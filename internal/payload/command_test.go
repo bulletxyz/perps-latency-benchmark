@@ -136,7 +136,7 @@ func TestResolveCommandUsesDirectPythonOverride(t *testing.T) {
 		"uv",
 		"run",
 		"--with",
-		"lighter-sdk",
+		"lighter-sdk==1.0.9",
 		"python",
 		"internal/venues/lighter/build_payload.py",
 	}, map[string]string{
