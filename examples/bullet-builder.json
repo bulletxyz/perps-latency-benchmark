@@ -46,7 +46,7 @@
         "price": "50000",
         "order_type": "post_only",
         "post_only_price_source": "book_top",
-        "post_only_price_offset_bps": 25,
+        "post_only_price_offset_bps": 500,
         "post_only_book_max_age_ms": 2000
       }
     }
