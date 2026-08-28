@@ -53,7 +53,7 @@
         "symbol": "BTC",
         "asset": 0,
         "side": "buy",
-        "size": "0.001",
+        "size": "0.0002",
         "price": "75000",
         "post_only_price_source": "hyperliquid_l2book_http",
         "post_only_price_offset_bps": 500,

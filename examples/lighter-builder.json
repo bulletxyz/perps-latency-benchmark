@@ -42,7 +42,7 @@
       "params": {
         "symbol": "BTC",
         "market_index": 1,
-        "base_amount": 100,
+        "base_amount": 20,
         "price": 750000,
         "post_only_price_source": "book_top",
         "post_only_price_offset_bps": 500,
