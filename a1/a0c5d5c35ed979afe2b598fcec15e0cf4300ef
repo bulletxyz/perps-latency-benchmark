@@ -1,0 +1,20 @@
+cmd/ch-exporter/main.go
+  s_bf87e650031b5d::t_277653513c00e3 1-61,63-111,113-114,116-239,248-379
+  s_bf87e650031b5d::t_ebb0420e980af6 62,112,115,240-247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a1a0c5d5c35ed979afe2b598fcec15e0cf4300ef",
+  "prompts": {},
+  "sessions": {
+    "s_bf87e650031b5d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d751dd88-260a-4d36-a407-f953886a82f0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
